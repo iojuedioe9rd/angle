@@ -390,28 +390,27 @@ void BufferVk::destroy(const gl::Context *context)
     (void)release(contextVk);
 }
 
-void BufferVk::releaseConversionBuffers(vk::Renderer *renderer)
+void BufferVk::releaseConversionBuffers(vk::Context *context)
 {
     for (ConversionBuffer &buffer : mVertexConversionBuffers)
     {
-        buffer.release(renderer);
+        buffer.release(context);
     }
     mVertexConversionBuffers.clear();
 }
 
 angle::Result BufferVk::release(ContextVk *contextVk)
 {
-    vk::Renderer *renderer = contextVk->getRenderer();
     if (mBuffer.valid())
     {
         ANGLE_TRY(contextVk->releaseBufferAllocation(&mBuffer));
     }
     if (mStagingBuffer.valid())
     {
-        mStagingBuffer.release(renderer);
+        mStagingBuffer.release(contextVk);
     }
 
-    releaseConversionBuffers(renderer);
+    releaseConversionBuffers(contextVk);
 
     return angle::Result::Continue;
 }
@@ -445,29 +444,25 @@ angle::Result BufferVk::setDataWithUsageFlags(const gl::Context *context,
                                               const void *data,
                                               size_t size,
                                               gl::BufferUsage usage,
-                                              GLbitfield flags)
+                                              GLbitfield flags,
+                                              gl::BufferStorage bufferStorage)
 {
     ContextVk *contextVk                      = vk::GetImpl(context);
     VkMemoryPropertyFlags memoryPropertyFlags = 0;
     bool persistentMapRequired                = false;
     const bool isExternalBuffer               = clientBuffer != nullptr;
 
-    switch (usage)
+    if (bufferStorage == gl::BufferStorage::Immutable)
     {
-        case gl::BufferUsage::InvalidEnum:
-        {
-            // glBufferStorage API call
-            memoryPropertyFlags =
-                GetStorageMemoryType(contextVk->getRenderer(), flags, isExternalBuffer);
-            persistentMapRequired = (flags & GL_MAP_PERSISTENT_BIT_EXT) != 0;
-            break;
-        }
-        default:
-        {
-            // glBufferData API call
-            memoryPropertyFlags = GetPreferredMemoryType(contextVk->getRenderer(), target, usage);
-            break;
-        }
+        // glBufferStorage API call
+        memoryPropertyFlags =
+            GetStorageMemoryType(contextVk->getRenderer(), flags, isExternalBuffer);
+        persistentMapRequired = (flags & GL_MAP_PERSISTENT_BIT_EXT) != 0;
+    }
+    else
+    {
+        // glBufferData API call
+        memoryPropertyFlags = GetPreferredMemoryType(contextVk->getRenderer(), target, usage);
     }
 
     if (isExternalBuffer)
@@ -620,7 +615,7 @@ angle::Result BufferVk::allocStagingBuffer(ContextVk *contextVk,
             mIsStagingBufferMapped = true;
             return angle::Result::Continue;
         }
-        mStagingBuffer.release(contextVk->getRenderer());
+        mStagingBuffer.release(contextVk);
     }
 
     ANGLE_TRY(
@@ -803,8 +798,8 @@ angle::Result BufferVk::mapRangeImpl(ContextVk *contextVk,
             // If there are unflushed write commands for the resource, flush them.
             if (contextVk->hasUnsubmittedUse(mBuffer.getWriteResourceUse()))
             {
-                ANGLE_TRY(contextVk->flushImpl(nullptr, nullptr,
-                                               RenderPassClosureReason::BufferWriteThenMap));
+                ANGLE_TRY(contextVk->flushAndSubmitCommands(
+                    nullptr, nullptr, RenderPassClosureReason::BufferWriteThenMap));
             }
             ANGLE_TRY(renderer->finishResourceUse(contextVk, mBuffer.getWriteResourceUse()));
         }
@@ -951,8 +946,7 @@ angle::Result BufferVk::getIndexRange(const gl::Context *context,
     // Could be removed if https://github.com/KhronosGroup/Vulkan-Tools/issues/84 is fixed.
     if (renderer->isMockICDEnabled())
     {
-        outRange->start = 0;
-        outRange->end   = 0;
+        *outRange = {};
         return angle::Result::Continue;
     }
 

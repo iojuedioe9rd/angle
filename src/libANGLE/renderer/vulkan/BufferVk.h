@@ -51,7 +51,7 @@ class ConversionBuffer
 
     bool valid() const { return mData && mData->valid(); }
     vk::BufferHelper *getBuffer() const { return mData.get(); }
-    void release(vk::Renderer *renderer) { mData->release(renderer); }
+    void release(vk::Context *context) { mData->release(context); }
     void destroy(vk::Renderer *renderer) { mData->destroy(renderer); }
 
   private:
@@ -161,7 +161,8 @@ class BufferVk : public BufferImpl
                                         const void *data,
                                         size_t size,
                                         gl::BufferUsage usage,
-                                        GLbitfield flags) override;
+                                        GLbitfield flags,
+                                        gl::BufferStorage bufferStorage) override;
     angle::Result setData(const gl::Context *context,
                           gl::BufferBinding target,
                           const void *data,
@@ -293,7 +294,7 @@ class BufferVk : public BufferImpl
                                VkMemoryPropertyFlags memoryPropertyFlags,
                                size_t size) const;
 
-    void releaseConversionBuffers(vk::Renderer *renderer);
+    void releaseConversionBuffers(vk::Context *context);
 
     vk::BufferHelper mBuffer;
 

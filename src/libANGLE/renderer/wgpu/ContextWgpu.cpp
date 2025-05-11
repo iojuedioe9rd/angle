@@ -9,10 +9,12 @@
 
 #include "libANGLE/renderer/wgpu/ContextWgpu.h"
 
+#include "common/PackedEnums.h"
 #include "common/debug.h"
 
 #include "compiler/translator/wgsl/OutputUniformBlocks.h"
 #include "libANGLE/Context.h"
+#include "libANGLE/Error.h"
 #include "libANGLE/renderer/OverlayImpl.h"
 #include "libANGLE/renderer/wgpu/BufferWgpu.h"
 #include "libANGLE/renderer/wgpu/CompilerWgpu.h"
@@ -57,6 +59,8 @@ constexpr angle::PackedEnumMap<webgpu::RenderPassClosureReason, const char *>
          "Render pass closed due to index buffer read back for streamed client data"},
         {webgpu::RenderPassClosureReason::VertexArrayStreaming,
          "Render pass closed for uploading streamed client data"},
+        {webgpu::RenderPassClosureReason::VertexArrayLineLoop,
+         "Render pass closed for line loop emulation"},
     }};
 
 }  // namespace
@@ -68,8 +72,10 @@ ContextWgpu::ContextWgpu(const gl::State &state, gl::ErrorSet *errorSet, Display
         DIRTY_BIT_RENDER_PIPELINE_BINDING,  // The pipeline needs to be bound for each renderpass
         DIRTY_BIT_VIEWPORT,
         DIRTY_BIT_SCISSOR,
+        DIRTY_BIT_BLEND_CONSTANT,
         DIRTY_BIT_VERTEX_BUFFERS,
         DIRTY_BIT_INDEX_BUFFER,
+        DIRTY_BIT_DRIVER_UNIFORMS,
         DIRTY_BIT_BIND_GROUPS,
     };
 }
@@ -85,12 +91,33 @@ angle::Result ContextWgpu::initialize(const angle::ImageLoadContext &imageLoadCo
 {
     mImageLoadContext = imageLoadContext;
 
+    // Create the driver uniform bind group layout, which won't ever change.
+    wgpu::BindGroupLayoutEntry driverUniformBindGroupEntry;
+    driverUniformBindGroupEntry.visibility =
+        wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+    driverUniformBindGroupEntry.binding               = sh::kDriverUniformBlockBinding;
+    driverUniformBindGroupEntry.buffer.type           = wgpu::BufferBindingType::Uniform;
+    driverUniformBindGroupEntry.buffer.minBindingSize = kDriverUniformSize;
+    // Create a bind group layout with these entries.
+    wgpu::BindGroupLayoutDescriptor driverUniformsBindGroupLayoutDesc{};
+    driverUniformsBindGroupLayoutDesc.entryCount = 1;
+    driverUniformsBindGroupLayoutDesc.entries    = &driverUniformBindGroupEntry;
+    mDriverUniformsBindGroupLayout =
+        getDevice().CreateBindGroupLayout(&driverUniformsBindGroupLayoutDesc);
+
+    // Driver uniforms should be set to 0 for later memcmp.
+    memset(&mDriverUniforms, 0, sizeof(mDriverUniforms));
+
     return angle::Result::Continue;
 }
 
 angle::Result ContextWgpu::onFramebufferChange(FramebufferWgpu *framebufferWgpu,
                                                gl::Command command)
 {
+    // May modify framebuffer size, so invalidate driver uniforms which contain the framebuffer
+    // size.
+    invalidateDriverUniforms();
+
     // If internal framebuffer state changes, always end the render pass
     ANGLE_TRY(endRenderPass(webgpu::RenderPassClosureReason::FramebufferInternalChange));
 
@@ -170,6 +197,18 @@ void ContextWgpu::invalidateIndexBuffer()
     mDirtyBits.set(DIRTY_BIT_INDEX_BUFFER);
 }
 
+void ContextWgpu::invalidateCurrentTextures()
+{
+    ProgramExecutableWgpu *executableWgpu = webgpu::GetImpl(mState.getProgramExecutable());
+    executableWgpu->markSamplerBindingsDirty();
+    mDirtyBits.set(DIRTY_BIT_BIND_GROUPS);
+}
+
+void ContextWgpu::invalidateDriverUniforms()
+{
+    mDirtyBits.set(DIRTY_BIT_DRIVER_UNIFORMS);
+}
+
 void ContextWgpu::ensureCommandEncoderCreated()
 {
     if (!mCurrentCommandEncoder)
@@ -200,20 +239,24 @@ angle::Result ContextWgpu::drawArrays(const gl::Context *context,
                                       GLint first,
                                       GLsizei count)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = static_cast<uint32_t>(count);
     ANGLE_TRY(setupDraw(context, mode, first, count, 1, gl::DrawElementsType::InvalidEnum, nullptr,
-                        0, nullptr));
-    mCommandBuffer.draw(static_cast<uint32_t>(count), 1, static_cast<uint32_t>(first), 0);
+                        0, &firstIndex, &indexCount));
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        mCommandBuffer.drawIndexed(indexCount, 1, firstIndex, 0, 0);
+    }
+    else
+    {
+        mCommandBuffer.draw(static_cast<uint32_t>(count), 1, static_cast<uint32_t>(first), 0);
+    }
     return angle::Result::Continue;
 }
 
@@ -223,21 +266,26 @@ angle::Result ContextWgpu::drawArraysInstanced(const gl::Context *context,
                                                GLsizei count,
                                                GLsizei instanceCount)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = static_cast<uint32_t>(count);
     ANGLE_TRY(setupDraw(context, mode, first, count, instanceCount,
-                        gl::DrawElementsType::InvalidEnum, nullptr, 0, nullptr));
-    mCommandBuffer.draw(static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount),
-                        static_cast<uint32_t>(first), 0);
+                        gl::DrawElementsType::InvalidEnum, nullptr, 0, &firstIndex, &indexCount));
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        mCommandBuffer.drawIndexed(indexCount, static_cast<uint32_t>(instanceCount), firstIndex, 0,
+                                   0);
+    }
+    else
+    {
+        mCommandBuffer.draw(indexCount, static_cast<uint32_t>(instanceCount),
+                            static_cast<uint32_t>(first), 0);
+    }
     return angle::Result::Continue;
 }
 
@@ -248,21 +296,26 @@ angle::Result ContextWgpu::drawArraysInstancedBaseInstance(const gl::Context *co
                                                            GLsizei instanceCount,
                                                            GLuint baseInstance)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = static_cast<uint32_t>(count);
     ANGLE_TRY(setupDraw(context, mode, first, count, instanceCount,
-                        gl::DrawElementsType::InvalidEnum, nullptr, 0, nullptr));
-    mCommandBuffer.draw(static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount),
-                        static_cast<uint32_t>(first), baseInstance);
+                        gl::DrawElementsType::InvalidEnum, nullptr, 0, &firstIndex, &indexCount));
+    if (mode == gl::PrimitiveMode::LineLoop)
+    {
+        mCommandBuffer.drawIndexed(indexCount, static_cast<uint32_t>(instanceCount), firstIndex, 0,
+                                   baseInstance);
+    }
+    else
+    {
+        mCommandBuffer.draw(static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount),
+                            static_cast<uint32_t>(first), baseInstance);
+    }
     return angle::Result::Continue;
 }
 
@@ -272,20 +325,16 @@ angle::Result ContextWgpu::drawElements(const gl::Context *context,
                                         gl::DrawElementsType type,
                                         const void *indices)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    uint32_t firstVertex = 0;
+    uint32_t indexCount  = static_cast<uint32_t>(count);
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
-    uint32_t firstVertex = 0;
-    ANGLE_TRY(setupDraw(context, mode, 0, count, 1, type, indices, 0, &firstVertex));
-    mCommandBuffer.drawIndexed(static_cast<uint32_t>(count), 1, firstVertex, 0, 0);
+    ANGLE_TRY(setupDraw(context, mode, 0, count, 1, type, indices, 0, &firstVertex, &indexCount));
+    mCommandBuffer.drawIndexed(indexCount, 1, firstVertex, 0, 0);
     return angle::Result::Continue;
 }
 
@@ -296,21 +345,17 @@ angle::Result ContextWgpu::drawElementsBaseVertex(const gl::Context *context,
                                                   const void *indices,
                                                   GLint baseVertex)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    uint32_t firstVertex = 0;
+    uint32_t indexCount  = static_cast<uint32_t>(count);
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
-    uint32_t firstVertex = 0;
-    ANGLE_TRY(setupDraw(context, mode, 0, count, 1, type, indices, baseVertex, &firstVertex));
-    mCommandBuffer.drawIndexed(static_cast<uint32_t>(count), 1, firstVertex,
-                               static_cast<uint32_t>(baseVertex), 0);
+    ANGLE_TRY(setupDraw(context, mode, 0, count, 1, type, indices, baseVertex, &firstVertex,
+                        &indexCount));
+    mCommandBuffer.drawIndexed(indexCount, 1, firstVertex, static_cast<uint32_t>(baseVertex), 0);
     return angle::Result::Continue;
 }
 
@@ -321,21 +366,17 @@ angle::Result ContextWgpu::drawElementsInstanced(const gl::Context *context,
                                                  const void *indices,
                                                  GLsizei instances)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    uint32_t firstVertex = 0;
+    uint32_t indexCount  = static_cast<uint32_t>(count);
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
-    uint32_t firstVertex = 0;
-    ANGLE_TRY(setupDraw(context, mode, 0, count, instances, type, indices, 0, &firstVertex));
-    mCommandBuffer.drawIndexed(static_cast<uint32_t>(count), static_cast<uint32_t>(instances),
-                               firstVertex, 0, 0);
+    ANGLE_TRY(
+        setupDraw(context, mode, 0, count, instances, type, indices, 0, &firstVertex, &indexCount));
+    mCommandBuffer.drawIndexed(indexCount, static_cast<uint32_t>(instances), firstVertex, 0, 0);
     return angle::Result::Continue;
 }
 
@@ -347,22 +388,18 @@ angle::Result ContextWgpu::drawElementsInstancedBaseVertex(const gl::Context *co
                                                            GLsizei instances,
                                                            GLint baseVertex)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    uint32_t firstVertex = 0;
+    uint32_t indexCount  = static_cast<uint32_t>(count);
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
-    uint32_t firstVertex = 0;
-    ANGLE_TRY(
-        setupDraw(context, mode, 0, count, instances, type, indices, baseVertex, &firstVertex));
-    mCommandBuffer.drawIndexed(static_cast<uint32_t>(count), static_cast<uint32_t>(instances),
-                               firstVertex, static_cast<uint32_t>(baseVertex), 0);
+    ANGLE_TRY(setupDraw(context, mode, 0, count, instances, type, indices, baseVertex, &firstVertex,
+                        &indexCount));
+    mCommandBuffer.drawIndexed(indexCount, static_cast<uint32_t>(instances), firstVertex,
+                               static_cast<uint32_t>(baseVertex), 0);
     return angle::Result::Continue;
 }
 
@@ -375,22 +412,18 @@ angle::Result ContextWgpu::drawElementsInstancedBaseVertexBaseInstance(const gl:
                                                                        GLint baseVertex,
                                                                        GLuint baseInstance)
 {
-    if (mode == gl::PrimitiveMode::LineLoop)
-    {
-        UNIMPLEMENTED();
-        return angle::Result::Continue;
-    }
-    else if (mode == gl::PrimitiveMode::TriangleFan)
+    uint32_t firstVertex = 0;
+    uint32_t indexCount  = static_cast<uint32_t>(count);
+    if (mode == gl::PrimitiveMode::TriangleFan)
     {
         UNIMPLEMENTED();
         return angle::Result::Continue;
     }
 
-    uint32_t firstVertex = 0;
-    ANGLE_TRY(
-        setupDraw(context, mode, 0, count, instances, type, indices, baseVertex, &firstVertex));
-    mCommandBuffer.drawIndexed(static_cast<uint32_t>(count), static_cast<uint32_t>(instances),
-                               firstVertex, static_cast<uint32_t>(baseVertex),
+    ANGLE_TRY(setupDraw(context, mode, 0, count, instances, type, indices, baseVertex, &firstVertex,
+                        &indexCount));
+    mCommandBuffer.drawIndexed(indexCount, static_cast<uint32_t>(instances), firstVertex,
+                               static_cast<uint32_t>(baseVertex),
                                static_cast<uint32_t>(baseInstance));
     return angle::Result::Continue;
 }
@@ -581,6 +614,9 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 setColorAttachmentFormats(framebufferWgpu->getCurrentColorAttachmentFormats());
                 setDepthStencilFormat(framebufferWgpu->getCurrentDepthStencilAttachmentFormat());
 
+                // May modify framebuffer size, so invalidate driver uniforms which contain the
+                // framebuffer size.
+                invalidateDriverUniforms();
                 ANGLE_TRY(endRenderPass(webgpu::RenderPassClosureReason::FramebufferBindingChange));
             }
             break;
@@ -597,14 +633,54 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 break;
             case gl::state::DIRTY_BIT_DEPTH_RANGE:
                 mDirtyBits.set(DIRTY_BIT_VIEWPORT);
+                // Driver uniforms include the depth range, which has now changed.
+                invalidateDriverUniforms();
                 break;
             case gl::state::DIRTY_BIT_BLEND_ENABLED:
+            {
+                const gl::BlendStateExt &blendStateExt = mState.getBlendStateExt();
+                gl::DrawBufferMask enabledMask         = blendStateExt.getEnabledMask();
+                for (size_t i = 0; i < blendStateExt.getDrawBufferCount(); i++)
+                {
+                    if (mRenderPipelineDesc.setBlendEnabled(i, enabledMask.test(i)))
+                    {
+                        invalidateCurrentRenderPipeline();
+                    }
+                }
+            }
                 break;
             case gl::state::DIRTY_BIT_BLEND_COLOR:
+                mDirtyBits.set(DIRTY_BIT_BLEND_CONSTANT);
                 break;
             case gl::state::DIRTY_BIT_BLEND_FUNCS:
+            {
+                const gl::BlendStateExt &blendState = mState.getBlendStateExt();
+                for (size_t i = 0; i < blendState.getDrawBufferCount(); i++)
+                {
+                    if (mRenderPipelineDesc.setBlendFuncs(
+                            i, gl_wgpu::GetBlendFactor(blendState.getSrcColorIndexed(i)),
+                            gl_wgpu::GetBlendFactor(blendState.getDstColorIndexed(i)),
+                            gl_wgpu::GetBlendFactor(blendState.getSrcAlphaIndexed(i)),
+                            gl_wgpu::GetBlendFactor(blendState.getDstAlphaIndexed(i))))
+                    {
+                        invalidateCurrentRenderPipeline();
+                    }
+                }
+            }
                 break;
             case gl::state::DIRTY_BIT_BLEND_EQUATIONS:
+            {
+                const gl::BlendStateExt &blendState = mState.getBlendStateExt();
+                for (size_t i = 0; i < blendState.getDrawBufferCount(); i++)
+                {
+                    if (mRenderPipelineDesc.setBlendEquations(
+                            i, gl_wgpu::GetBlendEquation(blendState.getEquationColorIndexed(i)),
+                            gl_wgpu::GetBlendEquation(blendState.getEquationAlphaIndexed(i))))
+                    {
+                        invalidateCurrentRenderPipeline();
+                    }
+                }
+            }
                 break;
             case gl::state::DIRTY_BIT_COLOR_MASK:
             {
@@ -619,6 +695,8 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
             }
             break;
             case gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_COVERAGE_ENABLED:
+                // Driver uniforms include the sample alpha to coverage state.
+                invalidateDriverUniforms();
                 break;
             case gl::state::DIRTY_BIT_SAMPLE_COVERAGE_ENABLED:
                 break;
@@ -629,10 +707,13 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
             case gl::state::DIRTY_BIT_SAMPLE_MASK:
                 break;
             case gl::state::DIRTY_BIT_DEPTH_TEST_ENABLED:
+                // Enabled and func get combined into one state in WebGPU. Only sync it once.
+                iter.setLaterBit(gl::state::DIRTY_BIT_DEPTH_FUNC);
                 break;
             case gl::state::DIRTY_BIT_DEPTH_FUNC:
                 if (mRenderPipelineDesc.setDepthFunc(
-                        gl_wgpu::getCompareFunc(glState.getDepthStencilState().depthFunc)))
+                        gl_wgpu::GetCompareFunc(glState.getDepthStencilState().depthFunc,
+                                                glState.getDepthStencilState().depthTest)))
                 {
                     invalidateCurrentRenderPipeline();
                 }
@@ -640,17 +721,22 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
             case gl::state::DIRTY_BIT_DEPTH_MASK:
                 break;
             case gl::state::DIRTY_BIT_STENCIL_TEST_ENABLED:
+                // Changing the state of stencil test affects both the front and back funcs.
+                iter.setLaterBit(gl::state::DIRTY_BIT_STENCIL_FUNCS_FRONT);
+                iter.setLaterBit(gl::state::DIRTY_BIT_STENCIL_FUNCS_BACK);
                 break;
             case gl::state::DIRTY_BIT_STENCIL_FUNCS_FRONT:
                 if (mRenderPipelineDesc.setStencilFrontFunc(
-                        gl_wgpu::getCompareFunc(glState.getDepthStencilState().stencilFunc)))
+                        gl_wgpu::GetCompareFunc(glState.getDepthStencilState().stencilFunc,
+                                                glState.getDepthStencilState().stencilTest)))
                 {
                     invalidateCurrentRenderPipeline();
                 }
                 break;
             case gl::state::DIRTY_BIT_STENCIL_FUNCS_BACK:
                 if (mRenderPipelineDesc.setStencilBackFunc(
-                        gl_wgpu::getCompareFunc(glState.getDepthStencilState().stencilBackFunc)))
+                        gl_wgpu::GetCompareFunc(glState.getDepthStencilState().stencilBackFunc,
+                                                glState.getDepthStencilState().stencilTest)))
                 {
                     invalidateCurrentRenderPipeline();
                 }
@@ -740,12 +826,16 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
             case gl::state::DIRTY_BIT_PROGRAM_BINDING:
             case gl::state::DIRTY_BIT_PROGRAM_EXECUTABLE:
                 invalidateCurrentRenderPipeline();
+                iter.setLaterBit(gl::state::DIRTY_BIT_TEXTURE_BINDINGS);
                 break;
             case gl::state::DIRTY_BIT_SAMPLER_BINDINGS:
+                invalidateCurrentTextures();
                 break;
             case gl::state::DIRTY_BIT_TEXTURE_BINDINGS:
+                invalidateCurrentTextures();
                 break;
             case gl::state::DIRTY_BIT_IMAGE_BINDINGS:
+                invalidateCurrentTextures();
                 break;
             case gl::state::DIRTY_BIT_TRANSFORM_FEEDBACK_BINDING:
                 break;
@@ -781,8 +871,12 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                     switch (extendedDirtyBit)
                     {
                         case gl::state::EXTENDED_DIRTY_BIT_CLIP_CONTROL:
+                            // Driver uniforms are calculated using the clip control state.
+                            invalidateDriverUniforms();
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_CLIP_DISTANCES:
+                            // Driver uniforms include the clip distances.
+                            invalidateDriverUniforms();
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_DEPTH_CLAMP_ENABLED:
                             break;
@@ -1026,15 +1120,30 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
                                      gl::DrawElementsType indexTypeOrInvalid,
                                      const void *indices,
                                      GLint baseVertex,
-                                     uint32_t *outFirstIndex)
+                                     uint32_t *outFirstIndex,
+                                     uint32_t *indexCountOut)
 {
-    if (mRenderPipelineDesc.setPrimitiveMode(mode, indexTypeOrInvalid))
+    gl::DrawElementsType dstDndexTypeOrInvalid = indexTypeOrInvalid;
+    if (mode == gl::PrimitiveMode::LineLoop &&
+        dstDndexTypeOrInvalid == gl::DrawElementsType::InvalidEnum)
+    {
+        if (vertexOrIndexCount >= std::numeric_limits<unsigned short>::max())
+        {
+            dstDndexTypeOrInvalid = gl::DrawElementsType::UnsignedInt;
+        }
+        else
+        {
+            dstDndexTypeOrInvalid = gl::DrawElementsType::UnsignedShort;
+        }
+    }
+
+    if (mRenderPipelineDesc.setPrimitiveMode(mode, dstDndexTypeOrInvalid))
     {
         invalidateCurrentRenderPipeline();
     }
 
     ProgramExecutableWgpu *executableWgpu = webgpu::GetImpl(mState.getProgramExecutable());
-    if (executableWgpu->checkDirtyUniforms())
+    if (executableWgpu->checkDirtyUniforms() || executableWgpu->hasDirtySamplerBindings())
     {
         mDirtyBits.set(DIRTY_BIT_BIND_GROUPS);
     }
@@ -1043,24 +1152,23 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
     if (mState.areClientArraysEnabled())
     {
         VertexArrayWgpu *vertexArrayWgpu = GetImplAs<VertexArrayWgpu>(mState.getVertexArray());
+        // Pass in original indexTypeOrInvalid into syncClientArrays because the method will need to
+        // determine if the original draw call was a DrawElements or DrawArrays call.
         ANGLE_TRY(vertexArrayWgpu->syncClientArrays(
-            context, mState.getProgramExecutable()->getActiveAttribLocationsMask(),
+            context, mState.getProgramExecutable()->getActiveAttribLocationsMask(), mode,
             firstVertexOrInvalid, vertexOrIndexCount, instanceCount, indexTypeOrInvalid, indices,
-            baseVertex, mState.isPrimitiveRestartEnabled(), &adjustedIndicesPtr));
+            baseVertex, mState.isPrimitiveRestartEnabled(), &adjustedIndicesPtr, indexCountOut));
     }
 
     bool reAddDirtyIndexBufferBit = false;
-    if (indexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
+    if (dstDndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
     {
-        *outFirstIndex = gl_wgpu::GetFirstIndexForDrawCall(indexTypeOrInvalid, adjustedIndicesPtr);
-        if (mCurrentIndexBufferType != indexTypeOrInvalid)
+        *outFirstIndex =
+            gl_wgpu::GetFirstIndexForDrawCall(dstDndexTypeOrInvalid, adjustedIndicesPtr);
+        if (mCurrentIndexBufferType != dstDndexTypeOrInvalid)
         {
             invalidateIndexBuffer();
         }
-    }
-    else
-    {
-        ASSERT(outFirstIndex == nullptr);
     }
 
     if (mDirtyBits.any())
@@ -1091,15 +1199,19 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
                     ANGLE_TRY(handleDirtyScissor(&dirtyBitIter));
                     break;
 
+                case DIRTY_BIT_BLEND_CONSTANT:
+                    ANGLE_TRY(handleDirtyBlendConstant(&dirtyBitIter));
+                    break;
+
                 case DIRTY_BIT_VERTEX_BUFFERS:
                     ANGLE_TRY(handleDirtyVertexBuffers(mDirtyVertexBuffers, &dirtyBitIter));
                     mDirtyVertexBuffers.reset();
                     break;
 
                 case DIRTY_BIT_INDEX_BUFFER:
-                    if (indexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
+                    if (dstDndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
                     {
-                        ANGLE_TRY(handleDirtyIndexBuffer(indexTypeOrInvalid, &dirtyBitIter));
+                        ANGLE_TRY(handleDirtyIndexBuffer(dstDndexTypeOrInvalid, &dirtyBitIter));
                     }
                     else
                     {
@@ -1107,6 +1219,9 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
                         // for a future indexed draw call when we know what index type to use
                         reAddDirtyIndexBufferBit = true;
                     }
+                    break;
+                case DIRTY_BIT_DRIVER_UNIFORMS:
+                    ANGLE_TRY(handleDirtyDriverUniforms(&dirtyBitIter));
                     break;
                 case DIRTY_BIT_BIND_GROUPS:
                     ANGLE_TRY(handleDirtyBindGroups(&dirtyBitIter));
@@ -1191,6 +1306,7 @@ angle::Result ContextWgpu::handleDirtyViewport(DirtyBits::Iterator *dirtyBitsIte
     ASSERT(mCurrentGraphicsPipeline);
     mCommandBuffer.setViewport(clampedViewport.x, clampedViewport.y, clampedViewport.width,
                                clampedViewport.height, depthMin, depthMax);
+
     return angle::Result::Continue;
 }
 
@@ -1225,6 +1341,24 @@ angle::Result ContextWgpu::handleDirtyScissor(DirtyBits::Iterator *dirtyBitsIter
     return angle::Result::Continue;
 }
 
+angle::Result ContextWgpu::handleDirtyBlendConstant(DirtyBits::Iterator *dirtyBitsIterator)
+{
+    const gl::ColorF &blendColor = mState.getBlendColor();
+
+    bool isDefaultBlendConstant = blendColor.red == 0 && blendColor.green == 0 &&
+                                  blendColor.blue == 0 && blendColor.alpha == 0;
+    if (isDefaultBlendConstant && !mCommandBuffer.hasSetBlendConstantCommand())
+    {
+        // Each render pass has a default blend constant set to all zeroes. We can skip setting it.
+        return angle::Result::Continue;
+    }
+
+    ASSERT(mCurrentGraphicsPipeline);
+    mCommandBuffer.setBlendConstant(blendColor.red, blendColor.green, blendColor.blue,
+                                    blendColor.alpha);
+    return angle::Result::Continue;
+}
+
 angle::Result ContextWgpu::handleDirtyRenderPass(DirtyBits::Iterator *dirtyBitsIterator)
 {
     FramebufferWgpu *drawFramebufferWgpu = webgpu::GetImpl(mState.getDrawFramebuffer());
@@ -1240,19 +1374,20 @@ angle::Result ContextWgpu::handleDirtyVertexBuffers(const gl::AttributesMask &sl
     VertexArrayWgpu *vertexArrayWgpu = GetImplAs<VertexArrayWgpu>(mState.getVertexArray());
     for (size_t slot : slots)
     {
-        webgpu::BufferHelper *buffer = vertexArrayWgpu->getVertexBuffer(slot);
-        if (!buffer)
+        const VertexBufferWithOffset &buffer = vertexArrayWgpu->getVertexBuffer(slot);
+        if (!buffer.buffer)
         {
             // Missing default attribute support
             ASSERT(!mState.getVertexArray()->getVertexAttribute(slot).enabled);
             UNIMPLEMENTED();
             continue;
         }
-        if (buffer->getMappedState())
+        if (buffer.buffer->getMappedState())
         {
-            ANGLE_TRY(buffer->unmap());
+            ANGLE_TRY(buffer.buffer->unmap());
         }
-        mCommandBuffer.setVertexBuffer(static_cast<uint32_t>(slot), buffer->getBuffer());
+        mCommandBuffer.setVertexBuffer(static_cast<uint32_t>(slot), buffer.buffer->getBuffer(),
+                                       buffer.offset, WGPU_WHOLE_SIZE);
     }
     return angle::Result::Continue;
 }
@@ -1275,10 +1410,93 @@ angle::Result ContextWgpu::handleDirtyIndexBuffer(gl::DrawElementsType indexType
 angle::Result ContextWgpu::handleDirtyBindGroups(DirtyBits::Iterator *dirtyBitsIterator)
 {
     ProgramExecutableWgpu *executableWgpu = webgpu::GetImpl(mState.getProgramExecutable());
-    wgpu::BindGroup bindGroup;
-    ANGLE_TRY(executableWgpu->updateUniformsAndGetBindGroup(this, &bindGroup));
-    // TODO(anglebug.com/376553328): need to set up every bind group here.
-    mCommandBuffer.setBindGroup(sh::kDefaultUniformBlockBindGroup, bindGroup);
+    wgpu::BindGroup defaultUniformBindGroup;
+    ANGLE_TRY(executableWgpu->updateUniformsAndGetBindGroup(this, &defaultUniformBindGroup));
+    mCommandBuffer.setBindGroup(sh::kDefaultUniformBlockBindGroup, defaultUniformBindGroup);
+
+    wgpu::BindGroup samplerAndTextureBindGroup;
+    ANGLE_TRY(executableWgpu->getSamplerAndTextureBindGroup(this, &samplerAndTextureBindGroup));
+    mCommandBuffer.setBindGroup(sh::kTextureAndSamplerBindGroup, samplerAndTextureBindGroup);
+
+    // Creating the driver uniform bind group is handled by handleDirtyDriverUniforms().
+    mCommandBuffer.setBindGroup(sh::kDriverUniformBindGroup, mDriverUniformsBindGroup);
+
+    return angle::Result::Continue;
+}
+
+angle::Result ContextWgpu::handleDirtyDriverUniforms(DirtyBits::Iterator *dirtyBitsIterator)
+{
+    DriverUniforms newDriverUniforms;
+    memset(&newDriverUniforms, 0, sizeof(newDriverUniforms));
+
+    newDriverUniforms.depthRange[0] = mState.getNearPlane();
+    newDriverUniforms.depthRange[1] = mState.getFarPlane();
+
+    FramebufferWgpu *drawFramebufferWgpu = webgpu::GetImpl(mState.getDrawFramebuffer());
+
+    newDriverUniforms.renderArea = drawFramebufferWgpu->getState().getDimensions().height << 16 |
+                                   drawFramebufferWgpu->getState().getDimensions().width;
+
+    const float flipX        = 1.0;
+    const float flipY        = 1.0f;
+    newDriverUniforms.flipXY = gl::PackSnorm4x8(
+        flipX, flipY, flipX, mState.getClipOrigin() == gl::ClipOrigin::LowerLeft ? -flipY : flipY);
+
+    // gl_ClipDistance
+    const uint32_t enabledClipDistances = mState.getEnabledClipDistances().bits();
+    ASSERT((enabledClipDistances & ~sh::vk::kDriverUniformsMiscEnabledClipPlanesMask) == 0);
+
+    // GL_CLIP_DEPTH_MODE_EXT
+    const uint32_t transformDepth = !mState.isClipDepthModeZeroToOne();
+    ASSERT((transformDepth & ~sh::vk::kDriverUniformsMiscTransformDepthMask) == 0);
+
+    // GL_SAMPLE_ALPHA_TO_COVERAGE
+    const uint32_t alphaToCoverage = mState.isSampleAlphaToCoverageEnabled();
+    ASSERT((alphaToCoverage & ~sh::vk::kDriverUniformsMiscAlphaToCoverageMask) == 0);
+
+    newDriverUniforms.misc =
+        (enabledClipDistances << sh::vk::kDriverUniformsMiscEnabledClipPlanesOffset) |
+        (transformDepth << sh::vk::kDriverUniformsMiscTransformDepthOffset) |
+        (alphaToCoverage << sh::vk::kDriverUniformsMiscAlphaToCoverageOffset);
+
+    // If no change to driver uniforms, return early.
+    if (memcmp(&newDriverUniforms, &mDriverUniforms, sizeof(DriverUniforms)) == 0)
+    {
+        return angle::Result::Continue;
+    }
+
+    // Cache the uniforms so we can check for changes later.
+    memcpy(&mDriverUniforms, &newDriverUniforms, sizeof(DriverUniforms));
+
+    // Upload the new driver uniforms to a new GPU buffer.
+    webgpu::BufferHelper driverUniformBuffer;
+
+    ANGLE_TRY(driverUniformBuffer.initBuffer(
+        getDevice(), sizeof(DriverUniforms),
+        wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, webgpu::MapAtCreation::Yes));
+
+    ASSERT(driverUniformBuffer.valid());
+
+    uint8_t *bufferData = driverUniformBuffer.getMapWritePointer(0, sizeof(DriverUniforms));
+    memcpy(bufferData, &mDriverUniforms, sizeof(DriverUniforms));
+
+    ANGLE_TRY(driverUniformBuffer.unmap());
+
+    // Now create the bind group containing the driver uniform buffer.
+    wgpu::BindGroupEntry bindGroupEntry;
+    bindGroupEntry.binding = sh::kDriverUniformBlockBinding;
+    bindGroupEntry.buffer  = driverUniformBuffer.getBuffer();
+    bindGroupEntry.offset  = 0;
+    bindGroupEntry.size    = sizeof(DriverUniforms);
+
+    wgpu::BindGroupDescriptor bindGroupDesc{};
+    bindGroupDesc.layout     = mDriverUniformsBindGroupLayout;
+    bindGroupDesc.entryCount = 1;
+    bindGroupDesc.entries    = &bindGroupEntry;
+    mDriverUniformsBindGroup = getDevice().CreateBindGroup(&bindGroupDesc);
+
+    // This bind group needs to be updated on the same draw call as the driver uniforms are updated.
+    dirtyBitsIterator->setLaterBit(DIRTY_BIT_BIND_GROUPS);
 
     return angle::Result::Continue;
 }

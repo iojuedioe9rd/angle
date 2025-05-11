@@ -40,6 +40,17 @@ class SeparateCompoundStructDeclarations : public MatchOutputCodeTest
     }
 };
 
+class SeparateStructFunctionDeclarations : public MatchOutputCodeTest
+{
+  public:
+    SeparateStructFunctionDeclarations() : MatchOutputCodeTest(GL_FRAGMENT_SHADER, SH_ESSL_OUTPUT)
+    {
+        ShCompileOptions defaultCompileOptions = {};
+        defaultCompileOptions.validateAST      = true;
+        setDefaultCompileOptions(defaultCompileOptions);
+    }
+};
+
 TEST_F(SeparateDeclarations, Arrays)
 {
     const char kShader[]   = R"(#version 300 es
@@ -321,6 +332,83 @@ void main(){
   {
     (_uo = vec4(1.0, 1.0, 1.0, 1.0));
   }
+}
+)";
+    compile(kShader);
+    EXPECT_EQ(kExpected, outputCode(SH_ESSL_OUTPUT));
+}
+
+// Test that struct name validation takes into account that intenal symbol namespace
+// is different to user namespace. The test should be kept in sync so that struct sbbf is the same
+// textual symbol as what the anonymous struct gets.
+TEST_F(SeparateCompoundStructDeclarations, InternalSymbolNoCrash)
+{
+    const char kShader[] = R"(
+precision highp float;
+struct { vec4 e; } g;
+struct sbbf { vec4 f; };
+void main(){
+  sbbf s;
+  gl_FragColor = g.e + s.f;
+})";
+    compile(kShader);
+    const char kExpected[] = R"(struct sbbf {
+  highp vec4 _ue;
+};
+sbbf _ug;
+struct _usbbf {
+  highp vec4 _uf;
+};
+void main(){
+  _usbbf _us;
+  (gl_FragColor = (_ug._ue + _us._uf));
+}
+)";
+    EXPECT_EQ(kExpected, outputCode(SH_ESSL_OUTPUT));
+}
+
+TEST_F(SeparateStructFunctionDeclarations, StructInStruct)
+{
+    const char kShader[]   = R"(#version 300 es
+struct S {
+  int f;
+};
+struct S2 { S h; } o()
+{
+  return S2(S(1));
+}
+void main() {
+  S2 s2 = o();
+})";
+    const char kExpected[] = R"(#version 300 es
+struct _uS {
+  mediump int _uf;
+};
+struct _uS2 {
+  _uS _uh;
+};
+_uS2 _uo(){
+  return _uS2(_uS(1));
+}
+void main(){
+  _uS2 _us2 = _uo();
+}
+)";
+    compile(kShader);
+    EXPECT_EQ(kExpected, outputCode(SH_ESSL_OUTPUT));
+}
+
+TEST_F(SeparateStructFunctionDeclarations, StructInAnonymousStruct)
+{
+    const char kShader[]   = R"(#version 300 es
+struct S {
+  int f;
+};
+struct { S h; } o();
+void main() {
+})";
+    const char kExpected[] = R"(#version 300 es
+void main(){
 }
 )";
     compile(kShader);

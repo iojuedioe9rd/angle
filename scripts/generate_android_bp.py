@@ -83,6 +83,8 @@ def write_blueprint_key_value(output, name, value, indent=1):
 
     if isinstance(value, set) or isinstance(value, list):
         value = list(sorted(set(value)))
+        if name == 'cflags':
+            fix_fortify_source_cflags(value)
 
     if isinstance(value, list):
         output.append(tabs(indent) + '%s: [' % name)
@@ -734,6 +736,22 @@ def handle_angle_non_conformant_extensions_and_versions(
             bp['defaults'].append(non_conform_defaults)
 
 
+def fix_fortify_source_cflags(cflags):
+    # search if there is any cflag starts with '-D_FORTIFY_SOURCE'
+    d_fortify_source_flag = [cflag for cflag in cflags if '-D_FORTIFY_SOURCE' in cflag]
+    # Insert -U_FORTIFY_SOURCE before the first -D_FORTIFY_SOURCE flag.
+    # In case a default mode for FORTIFY_SOURCE is predefined for a compiler,
+    # and the -D_FORTIFY_SOURCE mode we set is different from the default mode,
+    # the compiler will warn about "redefining FORTIFY_SOURCE macro".
+    # To fix this compiler warning, we unset the default mode with
+    # -U_FORTIFY_SOURCE before setting the desired FORTIFY_SOURCE mode in our
+    # cflags.
+    # reference:
+    # https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++#tldr-what-compiler-options-should-i-use
+    if d_fortify_source_flag:
+        cflags.insert(cflags.index(d_fortify_source_flag[0]), '-U_FORTIFY_SOURCE')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate Android blueprints from gn descriptions.')
@@ -764,8 +782,6 @@ def main():
         {
             'name':
                 'angle_common_library_cflags',
-            'cpp_std':
-                'gnu++17',  # TODO(b/330910097): std::popcount missing from external/libcxx
             'cflags': [
                 # Chrome and Android use different versions of Clang which support differnt warning options.
                 # Ignore errors about unrecognized warning flags.
@@ -826,12 +842,6 @@ def main():
             'src/third_party/libXNVCtrl/LICENSE',
             'src/third_party/volk/LICENSE.md',
             'third_party/abseil-cpp/LICENSE',
-            'third_party/android_system_sdk/LICENSE',
-            'third_party/bazel/LICENSE',
-            'third_party/colorama/LICENSE',
-            'third_party/proguard/LICENSE',
-            'third_party/r8/LICENSE',
-            'third_party/turbine/LICENSE',
             'third_party/glslang/LICENSE',
             'third_party/glslang/src/LICENSE.txt',
             'third_party/spirv-headers/LICENSE',

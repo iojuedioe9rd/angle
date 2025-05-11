@@ -340,16 +340,14 @@ void VertexArrayVk::destroy(const gl::Context *context)
 {
     ContextVk *contextVk = vk::GetImpl(context);
 
-    vk::Renderer *renderer = contextVk->getRenderer();
-
     for (std::unique_ptr<vk::BufferHelper> &buffer : mCachedStreamIndexBuffers)
     {
-        buffer->release(renderer);
+        buffer->release(contextVk);
     }
 
-    mStreamedIndexData.release(renderer);
-    mTranslatedByteIndexData.release(renderer);
-    mTranslatedByteIndirectData.release(renderer);
+    mStreamedIndexData.release(contextVk);
+    mTranslatedByteIndexData.release(contextVk);
+    mTranslatedByteIndirectData.release(contextVk);
     mLineLoopHelper.release(contextVk);
 }
 
@@ -1092,10 +1090,17 @@ angle::Result VertexArrayVk::syncDirtyAttrib(ContextVk *contextVk,
             mCurrentArrayBufferHandles[attribIndex] = emptyBuffer.getBuffer().getHandle();
             mCurrentArrayBufferOffsets[attribIndex] = emptyBuffer.getOffset();
 
-            bool combined = ShouldCombineAttributes(renderer, attrib, binding);
-            mCurrentArrayBufferStrides[attribIndex] =
-                combined ? binding.getStride()
-                         : vertexFormat.getActualBufferFormat(compressed).pixelBytes;
+            if (isStreamingVertexAttrib)
+            {
+                bool combined = ShouldCombineAttributes(renderer, attrib, binding);
+                mCurrentArrayBufferStrides[attribIndex] =
+                    combined ? binding.getStride()
+                             : vertexFormat.getActualBufferFormat(compressed).pixelBytes;
+            }
+            else
+            {
+                mCurrentArrayBufferStrides[attribIndex] = 0;
+            }
         }
 
         if (bufferOnly)
@@ -1337,6 +1342,17 @@ angle::Result VertexArrayVk::updateStreamedAttribs(const gl::Context *context,
                                            count, binding.getStride(),
                                            vertexFormat.getVertexLoadFunction(compressed)));
             }
+        }
+        else if (attrib.pointer == nullptr)
+        {
+            // Set them to the initial value.
+            vk::BufferHelper &emptyBuffer            = contextVk->getEmptyBuffer();
+            mCurrentArrayBuffers[attribIndex]        = &emptyBuffer;
+            mCurrentArrayBufferHandles[attribIndex]  = emptyBuffer.getBuffer().getHandle();
+            mCurrentArrayBufferOffsets[attribIndex]  = 0;
+            mCurrentArrayBufferStrides[attribIndex]  = 0;
+            mCurrentArrayBufferDivisors[attribIndex] = 0;
+            continue;
         }
         else
         {

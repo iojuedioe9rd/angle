@@ -125,8 +125,8 @@ class TParseContext : angle::NonCopyable
     // Look at a '.' field selector string and change it into offsets for a vector.
     bool parseVectorFields(const TSourceLoc &line,
                            const ImmutableString &compString,
-                           int vecSize,
-                           TVector<int> *fieldOffsets);
+                           uint32_t vecSize,
+                           TVector<uint32_t> *fieldOffsets);
 
     void assignError(const TSourceLoc &line, const char *op, const TType &left, const TType &right);
     void unaryOpError(const TSourceLoc &line, const char *op, const TType &operand);
@@ -531,6 +531,8 @@ class TParseContext : angle::NonCopyable
     size_t getMaxExpressionComplexity() const { return mMaxExpressionComplexity; }
     size_t getMaxStatementDepth() const { return mMaxStatementDepth; }
 
+    const ShCompileOptions &getCompileOptions() const { return mCompileOptions; }
+
     // TODO(jmadill): make this private
     TSymbolTable &symbolTable;  // symbol table that goes with the language currently being parsed
 
@@ -565,7 +567,9 @@ class TParseContext : angle::NonCopyable
     void checkCanBeDeclaredWithoutInitializer(const TSourceLoc &line,
                                               const ImmutableString &identifier,
                                               TType *type);
-
+    void checkDeclarationIsValidArraySize(const TSourceLoc &line,
+                                          const ImmutableString &identifier,
+                                          TType *type);
     bool checkIsValidTypeAndQualifierForArray(const TSourceLoc &indexLocation,
                                               const TPublicType &elementType);
     // Done for all atomic counter declarations, whether empty or not.

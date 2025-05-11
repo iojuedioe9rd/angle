@@ -90,6 +90,9 @@ void InitMinimumTextureCapsMap(const Version &clientVersion,
 // present. Does not determine if they are natively supported without decompression.
 bool DetermineCompressedTextureETCSupport(const TextureCapsMap &textureCaps);
 
+// Determine support for signed normalized format renderability.
+bool DetermineRenderSnormSupport(const TextureCapsMap &textureCaps, bool textureNorm16EXT);
+
 // Pointer to a boolean member of the Extensions struct
 using ExtensionBool = bool Extensions::*;
 
@@ -172,9 +175,8 @@ struct Limitations
     // by default in shared renderer code.
     bool baseInstanceBaseVertexEmulated = true;
 
-    // EXT_base_instance is emulated and should only be exposed to WebGL. Emulated by default in
-    // shared renderer code.
-    bool baseInstanceEmulated = true;
+    // EXT_base_instance may be emulated on GL backend.
+    bool baseInstanceEmulated = false;
 };
 
 struct TypePrecision
@@ -388,7 +390,6 @@ struct Caps
 
     // GL_ANGLE_shader_pixel_local_storage
     GLuint maxPixelLocalStoragePlanes                       = 0;
-    GLuint maxColorAttachmentsWithActivePixelLocalStorage   = 0;
     GLuint maxCombinedDrawBuffersAndPixelLocalStoragePlanes = 0;
 
     // GL_EXT_shader_pixel_local_storage.
@@ -582,6 +583,9 @@ struct DisplayExtensions
     // EGL_ANDROID_get_frame_timestamps
     bool getFrameTimestamps = false;
 
+    // EGL_ANDROID_front_buffer_auto_refresh
+    bool frontBufferAutoRefreshANDROID = false;
+
     // EGL_ANGLE_timestamp_surface_attribute
     bool timestampSurfaceAttributeANGLE = false;
 
@@ -614,12 +618,6 @@ struct DisplayExtensions
 
     // EGL_IMG_context_priority
     bool contextPriority = false;
-
-    // EGL_ANGLE_ggp_stream_descriptor
-    bool ggpStreamDescriptor = false;
-
-    // EGL_ANGLE_swap_with_frame_token
-    bool swapWithFrameToken = false;
 
     // EGL_KHR_gl_colorspace
     bool glColorspace = false;
@@ -707,6 +705,12 @@ struct DisplayExtensions
 
     // EGL_ANGLE_global_fence_sync
     bool globalFenceSyncANGLE = false;
+
+    // EGL_ANGLE_memory_usage_report
+    bool memoryUsageReportANGLE = false;
+
+    // EGL_EXT_surface_compression
+    bool surfaceCompressionEXT = false;
 };
 
 struct DeviceExtensions
@@ -790,6 +794,9 @@ struct ClientExtensions
 
     // EGL_ANGLE_platform_angle_vulkan
     bool platformANGLEVulkan = false;
+
+    // EGL_ANGLE_platform_angle_vulkan_device_uuid
+    bool platformANGLEVulkanDeviceUUID = false;
 
     // EGL_ANGLE_platform_angle_metal
     bool platformANGLEMetal = false;
