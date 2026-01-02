@@ -153,9 +153,6 @@ PlatformParameters ES3_D3D11();
 PlatformParameters ES3_D3D11_FL11_1();
 PlatformParameters ES3_D3D11_FL11_0();
 PlatformParameters ES3_D3D11_FL10_1();
-PlatformParameters ES31_D3D11();
-PlatformParameters ES31_D3D11_FL11_1();
-PlatformParameters ES31_D3D11_FL11_0();
 
 PlatformParameters ES3_D3D11_WARP();
 PlatformParameters ES3_D3D11_FL11_1_WARP();
@@ -205,12 +202,6 @@ PlatformParameters ES3_METAL();
 
 PlatformParameters ES2_WGL();
 PlatformParameters ES3_WGL();
-
-PlatformParameters ES1_EGL();
-PlatformParameters ES2_EGL();
-PlatformParameters ES3_EGL();
-PlatformParameters ES31_EGL();
-PlatformParameters ES32_EGL();
 
 PlatformParameters ES1_ANGLE_Vulkan_Secondaries();
 PlatformParameters ES2_ANGLE_Vulkan_Secondaries();

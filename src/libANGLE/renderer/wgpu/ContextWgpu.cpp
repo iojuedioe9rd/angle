@@ -7,6 +7,10 @@
 //    Implements the class methods for ContextWgpu.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include "libANGLE/renderer/wgpu/ContextWgpu.h"
 
 #include "common/PackedEnums.h"
@@ -61,6 +65,11 @@ constexpr angle::PackedEnumMap<webgpu::RenderPassClosureReason, const char *>
          "Render pass closed for uploading streamed client data"},
         {webgpu::RenderPassClosureReason::VertexArrayLineLoop,
          "Render pass closed for line loop emulation"},
+        {webgpu::RenderPassClosureReason::CopyBufferToTexture,
+         "Render pass closed to update texture"},
+        {webgpu::RenderPassClosureReason::CopyTextureToTexture,
+         "Render pass closed to copy texture"},
+        {webgpu::RenderPassClosureReason::CopyImage, "Render pass closed to copy image"},
     }};
 
 }  // namespace
@@ -89,21 +98,27 @@ void ContextWgpu::onDestroy(const gl::Context *context)
 
 angle::Result ContextWgpu::initialize(const angle::ImageLoadContext &imageLoadContext)
 {
+    const DawnProcTable *wgpu = webgpu::GetProcs(this);
+
     mImageLoadContext = imageLoadContext;
 
     // Create the driver uniform bind group layout, which won't ever change.
-    wgpu::BindGroupLayoutEntry driverUniformBindGroupEntry;
-    driverUniformBindGroupEntry.visibility =
-        wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+    WGPUBindGroupLayoutEntry driverUniformBindGroupEntry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+    driverUniformBindGroupEntry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
     driverUniformBindGroupEntry.binding               = sh::kDriverUniformBlockBinding;
-    driverUniformBindGroupEntry.buffer.type           = wgpu::BufferBindingType::Uniform;
+    driverUniformBindGroupEntry.buffer.type           = WGPUBufferBindingType_Uniform;
     driverUniformBindGroupEntry.buffer.minBindingSize = kDriverUniformSize;
+    driverUniformBindGroupEntry.texture.sampleType    = WGPUTextureSampleType_BindingNotUsed;
+    driverUniformBindGroupEntry.sampler.type          = WGPUSamplerBindingType_BindingNotUsed;
+    driverUniformBindGroupEntry.storageTexture.access = WGPUStorageTextureAccess_BindingNotUsed;
     // Create a bind group layout with these entries.
-    wgpu::BindGroupLayoutDescriptor driverUniformsBindGroupLayoutDesc{};
+    WGPUBindGroupLayoutDescriptor driverUniformsBindGroupLayoutDesc =
+        WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
     driverUniformsBindGroupLayoutDesc.entryCount = 1;
     driverUniformsBindGroupLayoutDesc.entries    = &driverUniformBindGroupEntry;
-    mDriverUniformsBindGroupLayout =
-        getDevice().CreateBindGroupLayout(&driverUniformsBindGroupLayoutDesc);
+    mDriverUniformsBindGroupLayout               = webgpu::BindGroupLayoutHandle::Acquire(
+        wgpu,
+        wgpu->deviceCreateBindGroupLayout(getDevice().get(), &driverUniformsBindGroupLayoutDesc));
 
     // Driver uniforms should be set to 0 for later memcmp.
     memset(&mDriverUniforms, 0, sizeof(mDriverUniforms));
@@ -135,16 +150,18 @@ angle::Result ContextWgpu::flush(webgpu::RenderPassClosureReason closureReason)
 
     if (mCurrentCommandEncoder)
     {
-        wgpu::CommandBuffer commandBuffer = mCurrentCommandEncoder.Finish();
+        const DawnProcTable *wgpu                 = webgpu::GetProcs(this);
+        webgpu::CommandBufferHandle commandBuffer = webgpu::CommandBufferHandle::Acquire(
+            wgpu, wgpu->commandEncoderFinish(mCurrentCommandEncoder.get(), nullptr));
         mCurrentCommandEncoder            = nullptr;
 
-        getQueue().Submit(1, &commandBuffer);
+        wgpu->queueSubmit(getQueue().get(), 1, &commandBuffer.get());
     }
 
     return angle::Result::Continue;
 }
 
-void ContextWgpu::setColorAttachmentFormat(size_t colorIndex, wgpu::TextureFormat format)
+void ContextWgpu::setColorAttachmentFormat(size_t colorIndex, WGPUTextureFormat format)
 {
     if (mRenderPipelineDesc.setColorAttachmentFormat(colorIndex, format))
     {
@@ -152,8 +169,7 @@ void ContextWgpu::setColorAttachmentFormat(size_t colorIndex, wgpu::TextureForma
     }
 }
 
-void ContextWgpu::setColorAttachmentFormats(
-    const gl::DrawBuffersArray<wgpu::TextureFormat> &formats)
+void ContextWgpu::setColorAttachmentFormats(const gl::DrawBuffersArray<WGPUTextureFormat> &formats)
 {
     for (size_t i = 0; i < formats.size(); i++)
     {
@@ -161,7 +177,7 @@ void ContextWgpu::setColorAttachmentFormats(
     }
 }
 
-void ContextWgpu::setDepthStencilFormat(wgpu::TextureFormat format)
+void ContextWgpu::setDepthStencilFormat(WGPUTextureFormat format)
 {
     if (mRenderPipelineDesc.setDepthStencilAttachmentFormat(format))
     {
@@ -213,22 +229,44 @@ void ContextWgpu::ensureCommandEncoderCreated()
 {
     if (!mCurrentCommandEncoder)
     {
-        mCurrentCommandEncoder = getDevice().CreateCommandEncoder(nullptr);
+        const DawnProcTable *wgpu = webgpu::GetProcs(this);
+        mCurrentCommandEncoder    = webgpu::CommandEncoderHandle::Acquire(
+            wgpu, wgpu->deviceCreateCommandEncoder(getDevice().get(), nullptr));
     }
 }
 
-wgpu::CommandEncoder &ContextWgpu::getCurrentCommandEncoder()
+angle::Result ContextWgpu::getCurrentCommandEncoder(webgpu::RenderPassClosureReason closureReason,
+                                                    webgpu::CommandEncoderHandle *outHandle)
 {
-    return mCurrentCommandEncoder;
+    if (hasActiveRenderPass())
+    {
+        ANGLE_TRY(endRenderPass(closureReason));
+    }
+    ensureCommandEncoderCreated();
+    *outHandle = mCurrentCommandEncoder;
+    return angle::Result::Continue;
 }
 
 angle::Result ContextWgpu::finish(const gl::Context *context)
 {
+    const DawnProcTable *wgpu = webgpu::GetProcs(this);
+
     ANGLE_TRY(flush(webgpu::RenderPassClosureReason::GLFinish));
 
-    wgpu::Future onWorkSubmittedFuture = getQueue().OnSubmittedWorkDone(
-        wgpu::CallbackMode::WaitAnyOnly, [](wgpu::QueueWorkDoneStatus status) {});
-    wgpu::WaitStatus status = getInstance().WaitAny(onWorkSubmittedFuture, -1);
+    WGPUQueueWorkDoneCallbackInfo callback = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
+    callback.mode                          = WGPUCallbackMode_WaitAnyOnly;
+    callback.callback                      = [](WGPUQueueWorkDoneStatus status,
+                           WGPUStringView message,
+                           void *userdata1, void *userdata2) {
+        ASSERT(userdata1 == nullptr);
+        ASSERT(userdata2 == nullptr);
+    };
+
+    WGPUFutureWaitInfo onWorkSubmittedFuture = WGPU_FUTURE_WAIT_INFO_INIT;
+    onWorkSubmittedFuture.future = wgpu->queueOnSubmittedWorkDone(getQueue().get(), callback);
+
+    WGPUWaitStatus status =
+        wgpu->instanceWaitAny(getInstance().get(), 1, &onWorkSubmittedFuture, -1);
     ASSERT(!webgpu::IsWgpuError(status));
 
     return angle::Result::Continue;
@@ -743,12 +781,12 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 break;
             case gl::state::DIRTY_BIT_STENCIL_OPS_FRONT:
             {
-                wgpu::StencilOperation failOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilFail);
-                wgpu::StencilOperation depthFailOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilPassDepthFail);
-                wgpu::StencilOperation passOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilPassDepthPass);
+                WGPUStencilOperation failOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilFail);
+                WGPUStencilOperation depthFailOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilPassDepthFail);
+                WGPUStencilOperation passOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilPassDepthPass);
                 if (mRenderPipelineDesc.setStencilFrontOps(failOp, depthFailOp, passOp))
                 {
                     invalidateCurrentRenderPipeline();
@@ -757,12 +795,12 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
             break;
             case gl::state::DIRTY_BIT_STENCIL_OPS_BACK:
             {
-                wgpu::StencilOperation failOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilBackFail);
-                wgpu::StencilOperation depthFailOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilBackPassDepthFail);
-                wgpu::StencilOperation passOp =
-                    gl_wgpu::getStencilOp(glState.getDepthStencilState().stencilBackPassDepthPass);
+                WGPUStencilOperation failOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilBackFail);
+                WGPUStencilOperation depthFailOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilBackPassDepthFail);
+                WGPUStencilOperation passOp =
+                    gl_wgpu::GetStencilOp(glState.getDepthStencilState().stencilBackPassDepthPass);
                 if (mRenderPipelineDesc.setStencilBackOps(failOp, depthFailOp, passOp))
                 {
                     invalidateCurrentRenderPipeline();
@@ -890,13 +928,17 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_SHADER_DERIVATIVE_HINT:
                             break;
-                        case gl::state::EXTENDED_DIRTY_BIT_SHADING_RATE:
+                        case gl::state::EXTENDED_DIRTY_BIT_SHADING_RATE_QCOM:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_SHADING_RATE_EXT:
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP_ENABLED:
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP:
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_BLEND_ADVANCED_COHERENT:
+                            break;
+                        case gl::state::EXTENDED_DIRTY_BIT_FETCH_PER_SAMPLE_ENABLED:
                             break;
                         default:
                             UNREACHABLE();
@@ -994,9 +1036,10 @@ BufferImpl *ContextWgpu::createBuffer(const gl::BufferState &state)
     return new BufferWgpu(state);
 }
 
-VertexArrayImpl *ContextWgpu::createVertexArray(const gl::VertexArrayState &data)
+VertexArrayImpl *ContextWgpu::createVertexArray(const gl::VertexArrayState &data,
+                                                const gl::VertexArrayBuffers &vertexArrayBuffers)
 {
-    return new VertexArrayWgpu(data);
+    return new VertexArrayWgpu(data, vertexArrayBuffers);
 }
 
 QueryImpl *ContextWgpu::createQuery(gl::QueryType type)
@@ -1080,11 +1123,13 @@ void ContextWgpu::handleError(GLenum errorCode,
     mErrors->handleError(errorCode, errorStream.str().c_str(), file, function, line);
 }
 
-angle::Result ContextWgpu::startRenderPass(const wgpu::RenderPassDescriptor &desc)
+angle::Result ContextWgpu::startRenderPass(const webgpu::PackedRenderPassDescriptor &desc)
 {
+    const DawnProcTable *wgpu = webgpu::GetProcs(this);
+
     ensureCommandEncoderCreated();
 
-    mCurrentRenderPass = mCurrentCommandEncoder.BeginRenderPass(&desc);
+    mCurrentRenderPass = webgpu::CreateRenderPass(wgpu, mCurrentCommandEncoder, desc);
     mDirtyBits |= mNewRenderPassDirtyBits;
 
     return angle::Result::Continue;
@@ -1094,16 +1139,19 @@ angle::Result ContextWgpu::endRenderPass(webgpu::RenderPassClosureReason closure
 {
     if (mCurrentRenderPass)
     {
+        const DawnProcTable *wgpu = webgpu::GetProcs(this);
+
         const char *reasonText = kRenderPassClosureReason[closureReason];
         ASSERT(reasonText);
 
         if (mCommandBuffer.hasCommands())
         {
-            ANGLE_WGPU_SCOPED_DEBUG_TRY(this, mCommandBuffer.recordCommands(mCurrentRenderPass));
+            ANGLE_WGPU_SCOPED_DEBUG_TRY(this,
+                                        mCommandBuffer.recordCommands(wgpu, mCurrentRenderPass));
             mCommandBuffer.clear();
         }
 
-        mCurrentRenderPass.End();
+        wgpu->renderPassEncoderEnd(mCurrentRenderPass.get());
         mCurrentRenderPass = nullptr;
     }
 
@@ -1123,21 +1171,21 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
                                      uint32_t *outFirstIndex,
                                      uint32_t *indexCountOut)
 {
-    gl::DrawElementsType dstDndexTypeOrInvalid = indexTypeOrInvalid;
+    gl::DrawElementsType dstIndexTypeOrInvalid = indexTypeOrInvalid;
     if (mode == gl::PrimitiveMode::LineLoop &&
-        dstDndexTypeOrInvalid == gl::DrawElementsType::InvalidEnum)
+        dstIndexTypeOrInvalid == gl::DrawElementsType::InvalidEnum)
     {
         if (vertexOrIndexCount >= std::numeric_limits<unsigned short>::max())
         {
-            dstDndexTypeOrInvalid = gl::DrawElementsType::UnsignedInt;
+            dstIndexTypeOrInvalid = gl::DrawElementsType::UnsignedInt;
         }
         else
         {
-            dstDndexTypeOrInvalid = gl::DrawElementsType::UnsignedShort;
+            dstIndexTypeOrInvalid = gl::DrawElementsType::UnsignedShort;
         }
     }
 
-    if (mRenderPipelineDesc.setPrimitiveMode(mode, dstDndexTypeOrInvalid))
+    if (mRenderPipelineDesc.setPrimitiveMode(mode, dstIndexTypeOrInvalid))
     {
         invalidateCurrentRenderPipeline();
     }
@@ -1161,11 +1209,11 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
     }
 
     bool reAddDirtyIndexBufferBit = false;
-    if (dstDndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
+    if (dstIndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
     {
         *outFirstIndex =
-            gl_wgpu::GetFirstIndexForDrawCall(dstDndexTypeOrInvalid, adjustedIndicesPtr);
-        if (mCurrentIndexBufferType != dstDndexTypeOrInvalid)
+            gl_wgpu::GetFirstIndexForDrawCall(dstIndexTypeOrInvalid, adjustedIndicesPtr);
+        if (mCurrentIndexBufferType != dstIndexTypeOrInvalid)
         {
             invalidateIndexBuffer();
         }
@@ -1209,9 +1257,9 @@ angle::Result ContextWgpu::setupDraw(const gl::Context *context,
                     break;
 
                 case DIRTY_BIT_INDEX_BUFFER:
-                    if (dstDndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
+                    if (dstIndexTypeOrInvalid != gl::DrawElementsType::InvalidEnum)
                     {
-                        ANGLE_TRY(handleDirtyIndexBuffer(dstDndexTypeOrInvalid, &dirtyBitIter));
+                        ANGLE_TRY(handleDirtyIndexBuffer(dstIndexTypeOrInvalid, &dirtyBitIter));
                     }
                     else
                     {
@@ -1250,7 +1298,7 @@ angle::Result ContextWgpu::handleDirtyRenderPipelineDesc(DirtyBits::Iterator *di
     ProgramExecutableWgpu *executable = webgpu::GetImpl(mState.getProgramExecutable());
     ASSERT(executable);
 
-    wgpu::RenderPipeline previousPipeline = std::move(mCurrentGraphicsPipeline);
+    webgpu::RenderPipelineHandle previousPipeline = std::move(mCurrentGraphicsPipeline);
     ANGLE_TRY(executable->getRenderPipeline(this, mRenderPipelineDesc, &mCurrentGraphicsPipeline));
     if (mCurrentGraphicsPipeline != previousPipeline)
     {
@@ -1303,6 +1351,13 @@ angle::Result ContextWgpu::handleDirtyViewport(DirtyBits::Iterator *dirtyBitsIte
         return angle::Result::Continue;
     }
 
+    FramebufferWgpu *drawFramebufferWgpu = webgpu::GetImpl(mState.getDrawFramebuffer());
+    if (drawFramebufferWgpu->flipY())
+    {
+        clampedViewport.y =
+            drawFramebufferWgpu->getState().getDimensions().height - clampedViewport.y1();
+    }
+
     ASSERT(mCurrentGraphicsPipeline);
     mCommandBuffer.setViewport(clampedViewport.x, clampedViewport.y, clampedViewport.width,
                                clampedViewport.height, depthMin, depthMax);
@@ -1333,6 +1388,13 @@ angle::Result ContextWgpu::handleDirtyScissor(DirtyBits::Iterator *dirtyBitsIter
         // Each render pass has a default scissor set equal to the size of the render targets. We
         // can skip setting the scissor.
         return angle::Result::Continue;
+    }
+
+    FramebufferWgpu *framebufferWgpu = webgpu::GetImpl(framebuffer);
+    if (framebufferWgpu->flipY())
+    {
+        clampedScissor.y = framebufferWgpu->getState().getDimensions().height - clampedScissor.y -
+                           clampedScissor.height;
     }
 
     ASSERT(mCurrentGraphicsPipeline);
@@ -1402,7 +1464,9 @@ angle::Result ContextWgpu::handleDirtyIndexBuffer(gl::DrawElementsType indexType
     {
         ANGLE_TRY(buffer->unmap());
     }
-    mCommandBuffer.setIndexBuffer(buffer->getBuffer(), gl_wgpu::GetIndexFormat(indexType), 0, -1);
+    mCommandBuffer.setIndexBuffer(buffer->getBuffer(),
+                                  static_cast<WGPUIndexFormat>(gl_wgpu::GetIndexFormat(indexType)),
+                                  0, -1);
     mCurrentIndexBufferType = indexType;
     return angle::Result::Continue;
 }
@@ -1410,11 +1474,11 @@ angle::Result ContextWgpu::handleDirtyIndexBuffer(gl::DrawElementsType indexType
 angle::Result ContextWgpu::handleDirtyBindGroups(DirtyBits::Iterator *dirtyBitsIterator)
 {
     ProgramExecutableWgpu *executableWgpu = webgpu::GetImpl(mState.getProgramExecutable());
-    wgpu::BindGroup defaultUniformBindGroup;
+    webgpu::BindGroupHandle defaultUniformBindGroup;
     ANGLE_TRY(executableWgpu->updateUniformsAndGetBindGroup(this, &defaultUniformBindGroup));
     mCommandBuffer.setBindGroup(sh::kDefaultUniformBlockBindGroup, defaultUniformBindGroup);
 
-    wgpu::BindGroup samplerAndTextureBindGroup;
+    webgpu::BindGroupHandle samplerAndTextureBindGroup;
     ANGLE_TRY(executableWgpu->getSamplerAndTextureBindGroup(this, &samplerAndTextureBindGroup));
     mCommandBuffer.setBindGroup(sh::kTextureAndSamplerBindGroup, samplerAndTextureBindGroup);
 
@@ -1426,6 +1490,8 @@ angle::Result ContextWgpu::handleDirtyBindGroups(DirtyBits::Iterator *dirtyBitsI
 
 angle::Result ContextWgpu::handleDirtyDriverUniforms(DirtyBits::Iterator *dirtyBitsIterator)
 {
+    const DawnProcTable *wgpu = webgpu::GetProcs(this);
+
     DriverUniforms newDriverUniforms;
     memset(&newDriverUniforms, 0, sizeof(newDriverUniforms));
 
@@ -1437,8 +1503,8 @@ angle::Result ContextWgpu::handleDirtyDriverUniforms(DirtyBits::Iterator *dirtyB
     newDriverUniforms.renderArea = drawFramebufferWgpu->getState().getDimensions().height << 16 |
                                    drawFramebufferWgpu->getState().getDimensions().width;
 
-    const float flipX        = 1.0;
-    const float flipY        = 1.0f;
+    const float flipX        = 1.0f;
+    const float flipY        = drawFramebufferWgpu->flipY() ? -1.0f : 1.0f;
     newDriverUniforms.flipXY = gl::PackSnorm4x8(
         flipX, flipY, flipX, mState.getClipOrigin() == gl::ClipOrigin::LowerLeft ? -flipY : flipY);
 
@@ -1471,9 +1537,9 @@ angle::Result ContextWgpu::handleDirtyDriverUniforms(DirtyBits::Iterator *dirtyB
     // Upload the new driver uniforms to a new GPU buffer.
     webgpu::BufferHelper driverUniformBuffer;
 
-    ANGLE_TRY(driverUniformBuffer.initBuffer(
-        getDevice(), sizeof(DriverUniforms),
-        wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, webgpu::MapAtCreation::Yes));
+    ANGLE_TRY(driverUniformBuffer.initBuffer(wgpu, getDevice(), sizeof(DriverUniforms),
+                                             WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
+                                             webgpu::MapAtCreation::Yes));
 
     ASSERT(driverUniformBuffer.valid());
 
@@ -1483,17 +1549,18 @@ angle::Result ContextWgpu::handleDirtyDriverUniforms(DirtyBits::Iterator *dirtyB
     ANGLE_TRY(driverUniformBuffer.unmap());
 
     // Now create the bind group containing the driver uniform buffer.
-    wgpu::BindGroupEntry bindGroupEntry;
+    WGPUBindGroupEntry bindGroupEntry = WGPU_BIND_GROUP_ENTRY_INIT;
     bindGroupEntry.binding = sh::kDriverUniformBlockBinding;
-    bindGroupEntry.buffer  = driverUniformBuffer.getBuffer();
+    bindGroupEntry.buffer             = driverUniformBuffer.getBuffer().get();
     bindGroupEntry.offset  = 0;
     bindGroupEntry.size    = sizeof(DriverUniforms);
 
-    wgpu::BindGroupDescriptor bindGroupDesc{};
-    bindGroupDesc.layout     = mDriverUniformsBindGroupLayout;
+    WGPUBindGroupDescriptor bindGroupDesc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bindGroupDesc.layout                  = mDriverUniformsBindGroupLayout.get();
     bindGroupDesc.entryCount = 1;
     bindGroupDesc.entries    = &bindGroupEntry;
-    mDriverUniformsBindGroup = getDevice().CreateBindGroup(&bindGroupDesc);
+    mDriverUniformsBindGroup              = webgpu::BindGroupHandle::Acquire(
+        wgpu, wgpu->deviceCreateBindGroup(getDevice().get(), &bindGroupDesc));
 
     // This bind group needs to be updated on the same draw call as the driver uniforms are updated.
     dirtyBitsIterator->setLaterBit(DIRTY_BIT_BIND_GROUPS);

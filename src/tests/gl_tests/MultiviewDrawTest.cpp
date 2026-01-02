@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Multiview draw tests:
-// Test issuing multiview Draw* commands.
+// MultiviewDrawTest.cpp:
+//   Test issuing multiview Draw* commands.
 //
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "platform/autogen/FeaturesD3D_autogen.h"
 #include "test_utils/MultiviewTest.h"
@@ -34,6 +38,12 @@ std::vector<Vector2> ConvertPixelCoordinatesToClipSpace(const std::vector<Vector
 }
 }  // namespace
 
+class MultiviewDependencyTest : public ANGLETest<>
+{
+  protected:
+    MultiviewDependencyTest() { setExtensionsEnabled(false); }
+};
+
 struct MultiviewRenderTestParams final : public MultiviewImplementationParams
 {
     MultiviewRenderTestParams(int samples,
@@ -58,7 +68,7 @@ std::ostream &operator<<(std::ostream &os, const MultiviewRenderTestParams &para
 }
 
 class MultiviewFramebufferTestBase : public MultiviewTestBase,
-                                     public ::testing::TestWithParam<MultiviewRenderTestParams>
+                                     public ::testing::WithParamInterface<MultiviewRenderTestParams>
 {
   protected:
     MultiviewFramebufferTestBase(const PlatformParameters &params, int samples)
@@ -292,6 +302,12 @@ class MultiviewRenderTest : public MultiviewFramebufferTestBase
     void SetUp() override
     {
         MultiviewFramebufferTestBase::FramebufferTestSetUp();
+        // SetUp() may have determined the test should be skipped and returned before completing.
+        if (Test::IsSkipped())
+        {
+            return;
+        }
+
         testSetUp();
     }
     void TearDown() override
@@ -529,6 +545,68 @@ class MultiviewLayeredRenderTest : public MultiviewFramebufferTestBase
     void SetUp() final { MultiviewFramebufferTestBase::FramebufferTestSetUp(); }
     void TearDown() final { MultiviewFramebufferTestBase::FramebufferTestTearDown(); }
 };
+
+// Tests that GL_OVR_multiview requires ES 3.0+ and does not enable GL_OVR_multiview2.
+TEST_P(MultiviewDependencyTest, MV1)
+{
+    ASSERT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview"));
+    ASSERT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview2"));
+
+    GLint maxViews = -1;
+    glGetIntegerv(GL_MAX_VIEWS_OVR, &maxViews);
+    EXPECT_GL_ERROR(GL_INVALID_ENUM);
+    EXPECT_EQ(maxViews, -1);
+
+    EnsureGLExtensionEnabled("GL_OVR_multiview");
+
+    // GL_OVR_multiview never enables GL_OVR_multiview2
+    EXPECT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview2"));
+
+    if (getClientMajorVersion() < 3)
+    {
+        EXPECT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview"));
+    }
+    else
+    {
+        glGetIntegerv(GL_MAX_VIEWS_OVR, &maxViews);
+        if (IsGLExtensionEnabled("GL_OVR_multiview"))
+        {
+            EXPECT_GL_NO_ERROR();
+            EXPECT_GE(maxViews, 2);
+        }
+        else
+        {
+            EXPECT_GL_ERROR(GL_INVALID_ENUM);
+            EXPECT_EQ(maxViews, -1);
+        }
+    }
+}
+
+// Tests that GL_OVR_multiview2 requires ES 3.0+ and does enable GL_OVR_multiview.
+TEST_P(MultiviewDependencyTest, MV2)
+{
+    ASSERT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview"));
+    ASSERT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview2"));
+
+    EnsureGLExtensionEnabled("GL_OVR_multiview2");
+
+    if (getClientMajorVersion() < 3)
+    {
+        EXPECT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview"));
+        EXPECT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview2"));
+    }
+    else
+    {
+        if (IsGLExtensionEnabled("GL_OVR_multiview2"))
+        {
+            EXPECT_TRUE(IsGLExtensionEnabled("GL_OVR_multiview"));
+        }
+        else
+        {
+            EXPECT_FALSE(IsGLExtensionEnabled("GL_OVR_multiview"));
+        }
+    }
+}
 
 // The test verifies that glDraw*Indirect works for any number of views.
 TEST_P(MultiviewDrawValidationTest, IndirectDraw)
@@ -2512,18 +2590,15 @@ MultiviewRenderTestParams MultisampledVertexShaderVulkan(ExtensionName multiview
     return MultiviewRenderTestParams(2, VertexShaderVulkan(3, 1, multiviewExtension));
 }
 
-MultiviewRenderTestParams MultisampledVertexShaderD3D11(ExtensionName multiviewExtension)
-{
-    return MultiviewRenderTestParams(2, VertexShaderD3D11(3, 1, multiviewExtension));
-}
-
-#define ALL_VERTEX_SHADER_CONFIGS(minor)                         \
+#define ES31_CAPABLE_VERTEX_SHADER_CONFIGS(minor)                \
     VertexShaderOpenGL(3, minor, ExtensionName::multiview),      \
         VertexShaderVulkan(3, minor, ExtensionName::multiview),  \
-        VertexShaderD3D11(3, minor, ExtensionName::multiview),   \
         VertexShaderOpenGL(3, minor, ExtensionName::multiview2), \
-        VertexShaderVulkan(3, minor, ExtensionName::multiview2), \
-        VertexShaderD3D11(3, minor, ExtensionName::multiview2)
+        VertexShaderVulkan(3, minor, ExtensionName::multiview2)
+
+#define ES3_ONLY_VERTEX_SHADER_CONFIGS                                                        \
+    ES31_CAPABLE_VERTEX_SHADER_CONFIGS(0), VertexShaderD3D11(3, 0, ExtensionName::multiview), \
+        VertexShaderD3D11(3, 0, ExtensionName::multiview2)
 
 #define ALL_SINGLESAMPLE_CONFIGS()                                                              \
     VertexShaderOpenGL(ExtensionName::multiview), VertexShaderVulkan(ExtensionName::multiview), \
@@ -2535,13 +2610,13 @@ MultiviewRenderTestParams MultisampledVertexShaderD3D11(ExtensionName multiviewE
 #define ALL_MULTISAMPLE_CONFIGS()                                  \
     MultisampledVertexShaderOpenGL(ExtensionName::multiview),      \
         MultisampledVertexShaderVulkan(ExtensionName::multiview),  \
-        MultisampledVertexShaderD3D11(ExtensionName::multiview),   \
         MultisampledVertexShaderOpenGL(ExtensionName::multiview2), \
-        MultisampledVertexShaderVulkan(ExtensionName::multiview2), \
-        MultisampledVertexShaderD3D11(ExtensionName::multiview2)
+        MultisampledVertexShaderVulkan(ExtensionName::multiview2)
+
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(MultiviewDependencyTest);
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MultiviewDrawValidationTest);
-ANGLE_INSTANTIATE_TEST(MultiviewDrawValidationTest, ALL_VERTEX_SHADER_CONFIGS(1));
+ANGLE_INSTANTIATE_TEST(MultiviewDrawValidationTest, ES31_CAPABLE_VERTEX_SHADER_CONFIGS(1));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MultiviewRenderDualViewTest);
 ANGLE_INSTANTIATE_TEST(MultiviewRenderDualViewTest,
@@ -2561,7 +2636,7 @@ ANGLE_INSTANTIATE_TEST(MultiviewOcclusionQueryTest, ALL_SINGLESAMPLE_CONFIGS());
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MultiviewProgramGenerationTest);
 ANGLE_INSTANTIATE_TEST(MultiviewProgramGenerationTest,
-                       ALL_VERTEX_SHADER_CONFIGS(0),
+                       ES3_ONLY_VERTEX_SHADER_CONFIGS,
                        GeomShaderD3D11(3, 0, ExtensionName::multiview),
                        GeomShaderD3D11(3, 0, ExtensionName::multiview2));
 

@@ -79,6 +79,7 @@
     /* GL_ARM_rgba8 */                                                                             \
     /* GL_ARM_shader_framebuffer_fetch */                                                          \
     /* GL_ARM_shader_framebuffer_fetch_depth_stencil */                                            \
+    /* GL_ARM_texture_unnormalized_coordinates */                                                  \
     /* GL_EXT_EGL_image_array */                                                                   \
     /* GL_EXT_EGL_image_external_wrap_modes */                                                     \
     /* GL_EXT_EGL_image_storage */                                                                 \
@@ -145,6 +146,13 @@
                                GLeglClientBufferEXT clientBuffer, GLbitfield flags);               \
     /* GL_EXT_float_blend */                                                                       \
     /* GL_EXT_frag_depth */                                                                        \
+    /* GL_EXT_fragment_shading_rate */                                                             \
+    void framebufferShadingRate(GLenum target, GLenum attachment, GLuint texture, GLint baseLayer, \
+                                GLsizei numLayers, GLsizei texelWidth, GLsizei texelHeight);       \
+    void getFragmentShadingRates(GLsizei samples, GLsizei maxCount, GLsizei *count,                \
+                                 GLenum *shadingRates);                                            \
+    /* GL_EXT_fragment_shading_rate_attachment */                                                  \
+    /* GL_EXT_fragment_shading_rate_primitive */                                                   \
     /* GL_EXT_geometry_shader */                                                                   \
     /* GL_EXT_gpu_shader5 */                                                                       \
     /* GL_EXT_instanced_arrays */                                                                  \
@@ -359,6 +367,10 @@
     void framebufferTextureMultiview(GLenum target, GLenum attachment, TextureID texturePacked,    \
                                      GLint level, GLint baseViewIndex, GLsizei numViews);          \
     /* GL_OVR_multiview2 */                                                                        \
+    /* GL_OVR_multiview_multisampled_render_to_texture */                                          \
+    void framebufferTextureMultisampleMultiview(                                                   \
+        GLenum target, GLenum attachment, TextureID texturePacked, GLint level, GLsizei samples,   \
+        GLint baseViewIndex, GLsizei numViews);                                                    \
     /* GL_QCOM_framebuffer_foveated */                                                             \
     void framebufferFoveationConfig(FramebufferID framebufferPacked, GLuint numLayers,             \
                                     GLuint focalPointsPerLayer, GLuint requestedFeatures,          \
@@ -670,7 +682,6 @@
                         GLboolean unpackUnmultiplyAlpha);                                          \
     /* GL_CHROMIUM_framebuffer_mixed_samples */                                                    \
     /* GL_CHROMIUM_lose_context */                                                                 \
-    void loseContext(GraphicsResetStatus currentPacked, GraphicsResetStatus otherPacked);          \
-    /* GL_CHROMIUM_sync_query */
+    void loseContext(GraphicsResetStatus currentPacked, GraphicsResetStatus otherPacked);
 
 #endif  // ANGLE_CONTEXT_API_EXT_AUTOGEN_H_

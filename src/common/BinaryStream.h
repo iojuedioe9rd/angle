@@ -9,6 +9,10 @@
 #ifndef COMMON_BINARYSTREAM_H_
 #define COMMON_BINARYSTREAM_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <stdint.h>
 #include <cstddef>
 #include <string>
@@ -312,7 +316,8 @@ class BinaryOutputStream : angle::NonCopyable
 
     const void *data() const { return mData.size() ? &mData[0] : nullptr; }
 
-    const std::vector<uint8_t> &getData() const { return mData; }
+    // No further use of this stream allowed after data is taken.
+    std::vector<uint8_t> takeData() { return std::move(mData); }
 
   private:
     template <typename T>

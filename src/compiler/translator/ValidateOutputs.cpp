@@ -72,15 +72,19 @@ ValidateOutputsTraverser::ValidateOutputsTraverser(const TExtensionBehavior &ext
 void ValidateOutputsTraverser::visitSymbol(TIntermSymbol *symbol)
 {
     if (symbol->variable().symbolType() == SymbolType::Empty)
+    {
         return;
+    }
 
     if (mVisitedSymbols.count(symbol->uniqueId().get()) == 1)
+    {
         return;
+    }
 
     mVisitedSymbols.insert(symbol->uniqueId().get());
 
     TQualifier qualifier = symbol->getQualifier();
-    if (qualifier == EvqFragmentOut)
+    if (qualifier == EvqFragmentOut || qualifier == EvqFragmentInOut)
     {
         const TLayoutQualifier &layoutQualifier = symbol->getType().getLayoutQualifier();
         if (layoutQualifier.location != -1)
@@ -112,7 +116,7 @@ void ValidateOutputsTraverser::validate(TDiagnostics *diagnostics) const
     OutputVector validOutputs(mUsesIndex1 ? mMaxDualSourceDrawBuffers : mMaxDrawBuffers, nullptr);
     OutputVector validSecondaryOutputs(mMaxDualSourceDrawBuffers, nullptr);
 
-    for (const auto &symbol : mOutputs)
+    for (TIntermSymbol *symbol : mOutputs)
     {
         const TType &type = symbol->getType();
         ASSERT(!type.isArrayOfArrays());  // Disallowed in GLSL ES 3.10 section 4.3.6.
@@ -173,6 +177,24 @@ void ValidateOutputsTraverser::validate(TDiagnostics *diagnostics) const
                        << "MAX_" << (mUsesIndex1 ? "DUAL_SOURCE_" : "") << "DRAW_BUFFERS";
                 error(*symbol, strstr.str().c_str(), diagnostics);
             }
+        }
+    }
+
+    // For outputs without a location, one may be provided with glBindFragDataLocationEXT or
+    // glBindFragDataLocationIndexedEXT, so we can't validate conflicts until link time.  However,
+    // we _can_ validate that no single array is larger than MAX_DRAW_BUFFERS.
+    for (TIntermSymbol *symbol : mUnspecifiedLocationOutputs)
+    {
+        const TType &type = symbol->getType();
+        ASSERT(!type.isArrayOfArrays());  // Disallowed in GLSL ES 3.10 section 4.3.6.
+        const size_t elementCount =
+            static_cast<size_t>(type.isArray() ? type.getOutermostArraySize() : 1u);
+        if (elementCount > validOutputs.size())
+        {
+            std::stringstream strstr = sh::InitializeStream<std::stringstream>();
+            strstr << "output array locations would exceed "
+                   << "MAX_" << (mUsesIndex1 ? "DUAL_SOURCE_" : "") << "DRAW_BUFFERS";
+            error(*symbol, strstr.str().c_str(), diagnostics);
         }
     }
 

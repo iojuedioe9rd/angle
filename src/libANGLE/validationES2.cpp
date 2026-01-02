@@ -6,6 +6,10 @@
 
 // validationES2.cpp: Validation functions for OpenGL ES 2.0 entry point parameters
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/validationES2_autogen.h"
 
 #include <cstdint>
@@ -78,6 +82,8 @@ bool IsPartialBlit(const Context *context,
 bool IsValidCopyTextureSourceInternalFormatEnum(GLenum internalFormat)
 {
     // Table 1.1 from the CHROMIUM_copy_texture spec
+    // No extension checks for the source formats because the texture has already been created and
+    // passed validation.
     switch (GetUnsizedFormat(internalFormat))
     {
         case GL_RED:
@@ -91,6 +97,14 @@ bool IsValidCopyTextureSourceInternalFormatEnum(GLenum internalFormat)
         case GL_BGRA_EXT:
         case GL_BGRA8_EXT:
         case GL_SRGB_ALPHA_EXT:
+        case GL_G8_B8R8_2PLANE_420_UNORM_ANGLE:
+        case GL_G8_B8_R8_3PLANE_420_UNORM_ANGLE:
+        case GL_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16_ANGLE:
+        case GL_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16_ANGLE:
+        case GL_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16_ANGLE:
+        case GL_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16_ANGLE:
+        case GL_G16_B16R16_2PLANE_420_UNORM_ANGLE:
+        case GL_G16_B16_R16_3PLANE_420_UNORM_ANGLE:
             return true;
 
         default:
@@ -799,41 +813,29 @@ bool IsValidESSLString(const char *str, size_t len)
     return true;
 }
 
-bool ValidateWebGLNamePrefix(const Context *context,
-                             angle::EntryPoint entryPoint,
-                             const GLchar *name)
+bool ValidateWebGLName(const Context *context, angle::EntryPoint entryPoint, const char *name)
 {
     ASSERT(context->isWebGL());
+    const bool isWebGL1 = context->getClientVersion() < ES_3_0;
 
-    // WebGL 1.0 [Section 6.16] GLSL Constructs
-    // Identifiers starting with "webgl_" and "_webgl_" are reserved for use by WebGL.
-    if (strncmp(name, "webgl_", 6) == 0 || strncmp(name, "_webgl_", 7) == 0)
+    // WebGL imposes a limit on the lengths of uniform and attribute locations.
+    const size_t maxLength = isWebGL1 ? 256 : 1024;
+    const size_t length    = strlen(name);
+
+    // Do not validate uniform name length because Chromium may pass longer
+    // strings than allowed in WebGL during its internal operations.
+    if (entryPoint != angle::EntryPoint::GLBindUniformLocationCHROMIUM &&
+        entryPoint != angle::EntryPoint::GLGetUniformLocation && length > maxLength)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kWebglBindAttribLocationReservedPrefix);
+        ANGLE_VALIDATION_ERRORF(GL_INVALID_VALUE, kWebGLNameLengthLimitExceeded,
+                                static_cast<int>(maxLength));
         return false;
     }
 
-    return true;
-}
-
-bool ValidateWebGLNameLength(const Context *context, angle::EntryPoint entryPoint, size_t length)
-{
-    ASSERT(context->isWebGL());
-
-    if (context->isWebGL1() && length > 256)
+    // WebGL disallows strings containing invalid ESSL characters.
+    if (!IsValidESSLString(name, length))
     {
-        // WebGL 1.0 [Section 6.21] Maxmimum Uniform and Attribute Location Lengths
-        // WebGL imposes a limit of 256 characters on the lengths of uniform and attribute
-        // locations.
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kWebglNameLengthLimitExceeded);
-
-        return false;
-    }
-    else if (length > 1024)
-    {
-        // WebGL 2.0 [Section 4.3.2] WebGL 2.0 imposes a limit of 1024 characters on the lengths of
-        // uniform and attribute locations.
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kWebgl2NameLengthLimitExceeded);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidNameCharacters);
         return false;
     }
 
@@ -1944,7 +1946,7 @@ bool ValidateDeleteVertexArraysOES(const Context *context,
                                    GLsizei n,
                                    const VertexArrayID *arrays)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, arrays);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, arrays);
 }
 
 bool ValidateGenVertexArraysOES(const Context *context,
@@ -1952,10 +1954,11 @@ bool ValidateGenVertexArraysOES(const Context *context,
                                 GLsizei n,
                                 const VertexArrayID *arrays)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, arrays);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, arrays);
 }
 
-bool ValidateIsVertexArrayOES(const Context *context,
+bool ValidateIsVertexArrayOES(const PrivateState &state,
+                              ErrorSet *errors,
                               angle::EntryPoint entryPoint,
                               VertexArrayID array)
 {
@@ -2103,7 +2106,7 @@ bool ValidateDebugMessageInsertBase(const Context *context,
                                     GLsizei length,
                                     const GLchar *buf)
 {
-    if (!ValidDebugSeverity(severity))
+    if (!ValidDebugSource(source, true))
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidDebugSource);
         return false;
@@ -2115,22 +2118,43 @@ bool ValidateDebugMessageInsertBase(const Context *context,
         return false;
     }
 
-    if (!ValidDebugSource(source, true))
+    if (!ValidDebugSeverity(severity))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidDebugSource);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidDebugSeverity);
         return false;
     }
 
     if (buf == nullptr)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kDebugMessageInsertBufNULL);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kDebugMessageNULL);
         return false;
     }
 
-    size_t messageLength = (length < 0) ? strlen(buf) : length;
-    if (messageLength > context->getCaps().maxDebugMessageLength)
+    const GLuint maxMessageLength = context->getCaps().maxDebugMessageLength;
+    const size_t messageLength    = (length < 0) ? strnlen(buf, maxMessageLength) : length;
+    if (messageLength >= maxMessageLength)
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kExceedsMaxDebugMessageLength);
+        return false;
+    }
+
+    return true;
+}
+
+bool ValidateGetDebugMessageLogBase(const Context *context,
+                                    angle::EntryPoint entryPoint,
+                                    GLuint count,
+                                    GLsizei bufSize,
+                                    const GLenum *sources,
+                                    const GLenum *types,
+                                    const GLuint *ids,
+                                    const GLenum *severities,
+                                    const GLsizei *lengths,
+                                    const GLchar *messageLog)
+{
+    if (bufSize < 0 && messageLog != nullptr)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeBufSize);
         return false;
     }
 
@@ -2181,13 +2205,8 @@ bool ValidateGetDebugMessageLogKHR(const Context *context,
                                    const GLsizei *lengths,
                                    const GLchar *messageLog)
 {
-    if (bufSize < 0 && messageLog != nullptr)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeBufSize);
-        return false;
-    }
-
-    return true;
+    return ValidateGetDebugMessageLogBase(context, entryPoint, count, bufSize, sources, types, ids,
+                                          severities, lengths, messageLog);
 }
 
 bool ValidatePushDebugGroupBase(const Context *context,
@@ -2203,8 +2222,15 @@ bool ValidatePushDebugGroupBase(const Context *context,
         return false;
     }
 
-    size_t messageLength = (length < 0) ? strlen(message) : length;
-    if (messageLength > context->getCaps().maxDebugMessageLength)
+    if (message == nullptr)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kDebugMessageNULL);
+        return false;
+    }
+
+    const GLuint maxMessageLength = context->getCaps().maxDebugMessageLength;
+    const size_t messageLength    = (length < 0) ? strnlen(message, maxMessageLength) : length;
+    if (messageLength >= maxMessageLength)
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kExceedsMaxDebugMessageLength);
         return false;
@@ -2279,7 +2305,7 @@ static bool ValidateObjectIdentifierAndName(const Context *context,
             return true;
 
         case GL_VERTEX_ARRAY:
-            if (context->getVertexArray({name}) == nullptr)
+            if (context->getPrivateState().getVertexArray({name}) == nullptr)
             {
                 ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidVertexArrayName);
                 return false;
@@ -2353,13 +2379,14 @@ static bool ValidateLabelLength(const Context *context,
                                 GLsizei length,
                                 const GLchar *label)
 {
+    const GLuint maxLabelLength = context->getCaps().maxLabelLength;
     size_t labelLength = 0;
 
     if (length < 0)
     {
         if (label != nullptr)
         {
-            labelLength = strlen(label);
+            labelLength = strnlen(label, maxLabelLength);
         }
     }
     else
@@ -2367,7 +2394,7 @@ static bool ValidateLabelLength(const Context *context,
         labelLength = static_cast<size_t>(length);
     }
 
-    if (labelLength > context->getCaps().maxLabelLength)
+    if (labelLength >= maxLabelLength)
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kExceedsMaxLabelLength);
         return false;
@@ -2403,12 +2430,7 @@ bool ValidateObjectLabelKHR(const Context *context,
                             GLsizei length,
                             const GLchar *label)
 {
-    if (!ValidateObjectLabelBase(context, entryPoint, identifier, name, length, label))
-    {
-        return false;
-    }
-
-    return true;
+    return ValidateObjectLabelBase(context, entryPoint, identifier, name, length, label);
 }
 
 bool ValidateGetObjectLabelBase(const Context *context,
@@ -2441,12 +2463,8 @@ bool ValidateGetObjectLabelKHR(const Context *context,
                                const GLsizei *length,
                                const GLchar *label)
 {
-    if (!ValidateGetObjectLabelBase(context, entryPoint, identifier, name, bufSize, length, label))
-    {
-        return false;
-    }
-
-    return true;
+    return ValidateGetObjectLabelBase(context, entryPoint, identifier, name, bufSize, length,
+                                      label);
 }
 
 static bool ValidateObjectPtrName(const Context *context,
@@ -2487,12 +2505,7 @@ bool ValidateObjectPtrLabelKHR(const Context *context,
                                GLsizei length,
                                const GLchar *label)
 {
-    if (!ValidateObjectPtrLabelBase(context, entryPoint, ptr, length, label))
-    {
-        return false;
-    }
-
-    return true;
+    return ValidateObjectPtrLabelBase(context, entryPoint, ptr, length, label);
 }
 
 bool ValidateGetObjectPtrLabelBase(const Context *context,
@@ -2523,12 +2536,7 @@ bool ValidateGetObjectPtrLabelKHR(const Context *context,
                                   const GLsizei *length,
                                   const GLchar *label)
 {
-    if (!ValidateGetObjectPtrLabelBase(context, entryPoint, ptr, bufSize, length, label))
-    {
-        return false;
-    }
-
-    return true;
+    return ValidateGetObjectPtrLabelBase(context, entryPoint, ptr, bufSize, length, label);
 }
 
 bool ValidateGetPointervKHR(const Context *context,
@@ -2633,13 +2641,21 @@ bool ValidateBlitFramebufferANGLE(const Context *context,
             }
 
             GLint samples = readFramebuffer->getSamples(context);
-            if (samples != 0 &&
-                IsPartialBlit(context, readColorAttachment, drawColorAttachment, srcX0, srcY0,
-                              srcX1, srcY1, dstX0, dstY0, dstX1, dstY1))
+            if (samples != 0)
             {
-                ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION,
-                                       kBlitExtensionMultisampledWholeBufferBlit);
-                return false;
+                if (readColorAttachment->ensureSizeResolved(context) == angle::Result::Stop ||
+                    drawColorAttachment->ensureSizeResolved(context) == angle::Result::Stop)
+                {
+                    // Context error must be generated by the failed call itself.
+                    return false;
+                }
+                if (IsPartialBlit(context, readColorAttachment, drawColorAttachment, srcX0, srcY0,
+                                  srcX1, srcY1, dstX0, dstY0, dstX1, dstY1))
+                {
+                    ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION,
+                                           kBlitExtensionMultisampledWholeBufferBlit);
+                    return false;
+                }
             }
         }
     }
@@ -2657,6 +2673,12 @@ bool ValidateBlitFramebufferANGLE(const Context *context,
 
             if (readBuffer && drawBuffer)
             {
+                if (readBuffer->ensureSizeResolved(context) == angle::Result::Stop ||
+                    drawBuffer->ensureSizeResolved(context) == angle::Result::Stop)
+                {
+                    // Context error must be generated by the failed call itself.
+                    return false;
+                }
                 if (IsPartialBlit(context, readBuffer, drawBuffer, srcX0, srcY0, srcX1, srcY1,
                                   dstX0, dstY0, dstX1, dstY1))
                 {
@@ -2747,7 +2769,7 @@ bool ValidateClear(const Context *context, angle::EntryPoint entryPoint, GLbitfi
         }
     }
 
-    if ((extensions.multiviewOVR || extensions.multiview2OVR) && extensions.disjointTimerQueryEXT)
+    if (extensions.multiviewOVR && extensions.disjointTimerQueryEXT)
     {
         const State &state       = context->getState();
         Framebuffer *framebuffer = state.getDrawFramebuffer();
@@ -3211,17 +3233,21 @@ bool ValidateBindUniformLocationCHROMIUM(const Context *context,
         return false;
     }
 
-    // The WebGL spec (section 6.20) disallows strings containing invalid ESSL characters for
-    // shader-related entry points
-    if (context->isWebGL() && !IsValidESSLString(name, strlen(name)))
+    if (name == nullptr)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidNameCharacters);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kUniformNameNull);
         return false;
     }
 
-    if (strncmp(name, "gl_", 3) == 0)
+    if (context->nameStartsWithReservedPrefix(name))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNameBeginsWithGL);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kNameStartsWithReservedPrefix);
+        return false;
+    }
+
+    if (context->isWebGL() && !ValidateWebGLName(context, entryPoint, name))
+    {
+        // Error already generated.
         return false;
     }
 
@@ -3659,10 +3685,24 @@ bool ValidateBufferData(const Context *context,
         return false;
     }
 
-    if (buffer->hasWebGLXFBBindingConflict(context->isWebGL()))
+    // Do some additional WebGL-specific validation
+    if (ANGLE_UNLIKELY(context->isWebGL()))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
-        return false;
+        if (buffer->hasWebGLXFBBindingConflict(true))
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
+            return false;
+        }
+
+        const TransformFeedback *transformFeedbackObject =
+            context->getState().getCurrentTransformFeedback();
+        if (transformFeedbackObject && transformFeedbackObject->isActive() &&
+            !transformFeedbackObject->isPaused() &&
+            transformFeedbackObject->isBufferBound(buffer->id()))
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
+            return false;
+        }
     }
 
     if (buffer->isImmutable())
@@ -3717,10 +3757,24 @@ bool ValidateBufferSubData(const Context *context,
         return false;
     }
 
-    if (buffer->hasWebGLXFBBindingConflict(context->isWebGL()))
+    // Do some additional WebGL-specific validation
+    if (ANGLE_UNLIKELY(context->isWebGL()))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
-        return false;
+        if (buffer->hasWebGLXFBBindingConflict(true))
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
+            return false;
+        }
+
+        const TransformFeedback *transformFeedbackObject =
+            context->getState().getCurrentTransformFeedback();
+        if (transformFeedbackObject && transformFeedbackObject->isActive() &&
+            !transformFeedbackObject->isPaused() &&
+            transformFeedbackObject->isBufferBound(buffer->id()))
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferBoundForTransformFeedback);
+            return false;
+        }
     }
 
     if (buffer->isImmutable() &&
@@ -3837,33 +3891,20 @@ bool ValidateBindAttribLocation(const Context *context,
 
     if (name == nullptr)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kAttributeLocationNull);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kAttributeNameNull);
         return false;
     }
 
-    if (strncmp(name, "gl_", 3) == 0)
+    if (context->nameStartsWithReservedPrefix(name))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kNameBeginsWithGL);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kNameStartsWithReservedPrefix);
         return false;
     }
 
-    if (context->isWebGL())
+    if (context->isWebGL() && !ValidateWebGLName(context, entryPoint, name))
     {
-        const size_t length = strlen(name);
-
-        if (!IsValidESSLString(name, length))
-        {
-            // The WebGL spec (section 6.20) disallows strings containing invalid ESSL characters
-            // for shader-related entry points
-            ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidNameCharacters);
-            return false;
-        }
-
-        if (!ValidateWebGLNameLength(context, entryPoint, length) ||
-            !ValidateWebGLNamePrefix(context, entryPoint, name))
-        {
-            return false;
-        }
+        // Error already generated.
+        return false;
     }
 
     Program *programObject = GetValidProgram(context, entryPoint, program);
@@ -4144,11 +4185,11 @@ bool ValidateRenderbufferStorageMultisampleANGLE(const Context *context,
     // ANGLE_framebuffer_multisample states GL_OUT_OF_MEMORY is generated on a failure to create
     // the specified storage. This is different than ES 3.0 in which a sample number higher
     // than the maximum sample number supported by this format generates a GL_INVALID_VALUE.
-    // The TextureCaps::getMaxSamples method is only guarenteed to be valid when the context is ES3.
+    // The getMaxSamples method is only guaranteed to be valid when the context is ES3.
     if (context->getClientVersion() >= ES_3_0)
     {
         const TextureCaps &formatCaps = context->getTextureCaps().get(internalformat);
-        if (static_cast<GLuint>(samples) > formatCaps.getMaxSamples())
+        if (static_cast<GLuint>(samples) > formatCaps.sampleCounts.getMaxSamples())
         {
             ANGLE_VALIDATION_ERROR(GL_OUT_OF_MEMORY, kSamplesOutOfRange);
             return false;
@@ -4356,26 +4397,28 @@ bool ValidateDetachShader(const Context *context,
     return true;
 }
 
-bool ValidateDisableVertexAttribArray(const Context *context,
+bool ValidateDisableVertexAttribArray(const PrivateState &state,
+                                      ErrorSet *errors,
                                       angle::EntryPoint entryPoint,
                                       GLuint index)
 {
-    if (index >= static_cast<GLuint>(context->getCaps().maxVertexAttributes))
+    if (index >= static_cast<GLuint>(state.getCaps().maxVertexAttributes))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
         return false;
     }
 
     return true;
 }
 
-bool ValidateEnableVertexAttribArray(const Context *context,
+bool ValidateEnableVertexAttribArray(const PrivateState &state,
+                                     ErrorSet *errors,
                                      angle::EntryPoint entryPoint,
                                      GLuint index)
 {
-    if (index >= static_cast<GLuint>(context->getCaps().maxVertexAttributes))
+    if (index >= static_cast<GLuint>(state.getCaps().maxVertexAttributes))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
         return false;
     }
 
@@ -4516,32 +4559,14 @@ bool ValidateGetAttribLocation(const Context *context,
 {
     if (name == nullptr)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kAttributeLocationNull);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kAttributeNameNull);
         return false;
     }
 
-    if (strncmp(name, "gl_", 3) == 0)
+    if (context->isWebGL() && !ValidateWebGLName(context, entryPoint, name))
     {
+        // Error already generated.
         return false;
-    }
-
-    if (context->isWebGL())
-    {
-        const size_t length = strlen(name);
-
-        if (!IsValidESSLString(name, length))
-        {
-            // The WebGL spec (section 6.20) disallows strings containing invalid ESSL characters
-            // for shader-related entry points
-            ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidNameCharacters);
-            return false;
-        }
-
-        if (!ValidateWebGLNameLength(context, entryPoint, length) ||
-            strncmp(name, "webgl_", 6) == 0 || strncmp(name, "_webgl_", 7) == 0)
-        {
-            return false;
-        }
     }
 
     Program *programObject = GetValidProgram(context, entryPoint, program);
@@ -4736,20 +4761,13 @@ bool ValidateGetUniformLocation(const Context *context,
 {
     if (name == nullptr)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kUniformLocationNull);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kUniformNameNull);
         return false;
     }
 
-    if (strstr(name, "gl_") == name)
+    if (context->isWebGL() && !ValidateWebGLName(context, entryPoint, name))
     {
-        return false;
-    }
-
-    // The WebGL spec (section 6.20) disallows strings containing invalid ESSL characters for
-    // shader-related entry points
-    if (context->isWebGL() && !IsValidESSLString(name, strlen(name)))
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidNameCharacters);
+        // Error already generated.
         return false;
     }
 
@@ -5293,7 +5311,7 @@ bool ValidateDeleteBuffers(const Context *context,
                            GLint n,
                            const BufferID *buffers)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, buffers);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, buffers);
 }
 
 bool ValidateDeleteFramebuffers(const Context *context,
@@ -5301,7 +5319,8 @@ bool ValidateDeleteFramebuffers(const Context *context,
                                 GLint n,
                                 const FramebufferID *framebuffers)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, framebuffers);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               framebuffers);
 }
 
 bool ValidateDeleteRenderbuffers(const Context *context,
@@ -5309,7 +5328,8 @@ bool ValidateDeleteRenderbuffers(const Context *context,
                                  GLint n,
                                  const RenderbufferID *renderbuffers)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, renderbuffers);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               renderbuffers);
 }
 
 bool ValidateDeleteTextures(const Context *context,
@@ -5317,7 +5337,7 @@ bool ValidateDeleteTextures(const Context *context,
                             GLint n,
                             const TextureID *textures)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, textures);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, textures);
 }
 
 bool ValidateDisable(const PrivateState &state,
@@ -5834,22 +5854,24 @@ bool ValidateTexStorage2DEXT(const Context *context,
                                              width, height, 1);
 }
 
-bool ValidateVertexAttribDivisorANGLE(const Context *context,
+bool ValidateVertexAttribDivisorANGLE(const PrivateState &privateState,
+                                      ErrorSet *errors,
                                       angle::EntryPoint entryPoint,
                                       GLuint index,
                                       GLuint divisor)
 {
-    if (index >= static_cast<GLuint>(context->getCaps().maxVertexAttributes))
+    if (index >= static_cast<GLuint>(privateState.getCaps().maxVertexAttributes))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
         return false;
     }
 
-    if (context->getLimitations().attributeZeroRequiresZeroDivisorInEXT)
+    if (privateState.getLimitations().attributeZeroRequiresZeroDivisorInEXT)
     {
         if (index == 0 && divisor != 0)
         {
-            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kAttributeZeroRequiresDivisorLimitation);
+            errors->validationError(entryPoint, GL_INVALID_OPERATION,
+                                    kAttributeZeroRequiresDivisorLimitation);
 
             // We also output an error message to the debugger window if tracing is active, so
             // that developers can see the error message.
@@ -5861,14 +5883,15 @@ bool ValidateVertexAttribDivisorANGLE(const Context *context,
     return true;
 }
 
-bool ValidateVertexAttribDivisorEXT(const Context *context,
+bool ValidateVertexAttribDivisorEXT(const PrivateState &privateState,
+                                    ErrorSet *errors,
                                     angle::EntryPoint entryPoint,
                                     GLuint index,
                                     GLuint divisor)
 {
-    if (index >= static_cast<GLuint>(context->getCaps().maxVertexAttributes))
+    if (index >= static_cast<GLuint>(privateState.getCaps().maxVertexAttributes))
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
+        errors->validationError(entryPoint, GL_INVALID_VALUE, kIndexExceedsMaxVertexAttribute);
         return false;
     }
 
@@ -5930,6 +5953,11 @@ bool ValidateMultiDrawArraysANGLE(const Context *context,
                                   const GLsizei *counts,
                                   GLsizei drawcount)
 {
+    if (drawcount < 0)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
+        return false;
+    }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
     {
         if (!ValidateDrawArrays(context, entryPoint, mode, firsts[drawID], counts[drawID]))
@@ -5948,6 +5976,11 @@ bool ValidateMultiDrawElementsANGLE(const Context *context,
                                     const GLvoid *const *indices,
                                     GLsizei drawcount)
 {
+    if (drawcount < 0)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
+        return false;
+    }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
     {
         if (!ValidateDrawElements(context, entryPoint, mode, counts[drawID], type, indices[drawID]))
@@ -5983,13 +6016,13 @@ bool ValidateFramebufferTexture2DMultisampleEXT(const Context *context,
 
     // EXT_multisampled_render_to_texture returns INVALID_OPERATION when a sample number higher than
     // the maximum sample number supported by this format is passed.
-    // The TextureCaps::getMaxSamples method is only guarenteed to be valid when the context is ES3.
+    // The getMaxSamples method is only guaranteed to be valid when the context is ES3.
     if (texture.value != 0 && context->getClientVersion() >= ES_3_0)
     {
         Texture *tex                  = context->getTexture(texture);
         GLenum sizedInternalFormat    = tex->getFormat(textarget, level).info->sizedInternalFormat;
         const TextureCaps &formatCaps = context->getTextureCaps().get(sizedInternalFormat);
-        if (static_cast<GLuint>(samples) > formatCaps.getMaxSamples())
+        if (static_cast<GLuint>(samples) > formatCaps.sampleCounts.getMaxSamples())
         {
             ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kSamplesOutOfRange);
             return false;
@@ -6039,11 +6072,11 @@ bool ValidateRenderbufferStorageMultisampleEXT(const Context *context,
     // EXT_multisampled_render_to_texture returns GL_OUT_OF_MEMORY on failure to create
     // the specified storage. This is different than ES 3.0 in which a sample number higher
     // than the maximum sample number supported by this format generates a GL_INVALID_VALUE.
-    // The TextureCaps::getMaxSamples method is only guarenteed to be valid when the context is ES3.
+    // The getMaxSamples method is only guaranteed to be valid when the context is ES3.
     if (context->getClientVersion() >= ES_3_0)
     {
         const TextureCaps &formatCaps = context->getTextureCaps().get(internalformat);
-        if (static_cast<GLuint>(samples) > formatCaps.getMaxSamples())
+        if (static_cast<GLuint>(samples) > formatCaps.sampleCounts.getMaxSamples())
         {
             ANGLE_VALIDATION_ERROR(GL_OUT_OF_MEMORY, kSamplesOutOfRange);
             return false;

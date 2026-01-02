@@ -10,6 +10,10 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_VK_UTILS_H_
 #define LIBANGLE_RENDERER_VULKAN_VK_UTILS_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <atomic>
 #include <limits>
 #include <queue>
@@ -121,13 +125,16 @@ enum class BufferUsageType
 
 // A maximum offset of 4096 covers almost every Vulkan driver on desktop (80%) and mobile (99%). The
 // next highest values to meet native drivers are 16 bits or 32 bits.
-constexpr uint32_t kAttributeOffsetMaxBits = 15;
+constexpr uint32_t kAttributeOffsetMaxBits = 16;
 constexpr uint32_t kInvalidMemoryTypeIndex = UINT32_MAX;
 constexpr uint32_t kInvalidMemoryHeapIndex = UINT32_MAX;
 
 namespace vk
 {
 class Renderer;
+
+constexpr VkImageUsageFlags kImageUsageTransferBits =
+    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
 // Used for memory allocation tracking.
 enum class MemoryAllocationType;
@@ -536,10 +543,15 @@ class MemoryProperties final : angle::NonCopyable
         return mMemoryProperties.memoryHeaps[heapIndex].size;
     }
 
-    const VkMemoryType &getMemoryType(uint32_t i) const { return mMemoryProperties.memoryTypes[i]; }
+    const VkMemoryType &getMemoryType(uint32_t memoryTypeIndex) const
+    {
+        return mMemoryProperties.memoryTypes[memoryTypeIndex];
+    }
 
     uint32_t getMemoryHeapCount() const { return mMemoryProperties.memoryHeapCount; }
     uint32_t getMemoryTypeCount() const { return mMemoryProperties.memoryTypeCount; }
+
+    void log(std::ostringstream &out) const;
 
   private:
     VkPhysicalDeviceMemoryProperties mMemoryProperties;
@@ -612,6 +624,31 @@ VkResult AllocateBufferMemoryWithRequirements(ErrorContext *context,
                                               VkMemoryPropertyFlags *memoryPropertyFlagsOut,
                                               uint32_t *memoryTypeIndexOut,
                                               DeviceMemory *deviceMemoryOut);
+
+angle::Result InitExternalSharedFDMemory(
+    ErrorContext *context,
+    const VkExternalMemoryHandleTypeFlagBits externalMemoryHandleType,
+    const int32_t sharedBufferFD,
+    VkMemoryPropertyFlags memoryProperties,
+    Buffer *buffer,
+    VkMemoryPropertyFlags *memoryPropertyFlagsOut,
+    uint32_t *memoryTypeIndexOut,
+    DeviceMemory *deviceMemoryOut,
+    VkDeviceSize *sizeOut);
+
+angle::Result GetHostPointerMemoryRequirements(ErrorContext *context,
+                                               void *hostPtr,
+                                               VkMemoryRequirements &memRequirements,
+                                               Buffer *buffer);
+
+angle::Result InitExternalHostMemory(ErrorContext *context,
+                                     void *hostPtr,
+                                     VkMemoryPropertyFlags memoryProperties,
+                                     Buffer *buffer,
+                                     VkMemoryPropertyFlags *memoryPropertyFlagsOut,
+                                     uint32_t *memoryTypeIndexOut,
+                                     DeviceMemory *deviceMemoryOut,
+                                     VkDeviceSize *sizeOut);
 
 gl::TextureType Get2DTextureType(uint32_t layerCount, GLint samples);
 
@@ -1347,6 +1384,18 @@ constexpr bool IsDynamicDescriptor(VkDescriptorType descriptorType)
     }
 }
 
+constexpr bool IsUniformBuffer(const VkDescriptorType descriptorType)
+{
+    return descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+           descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+}
+
+constexpr bool IsStorageBuffer(const VkDescriptorType descriptorType)
+{
+    return descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
+           descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+}
+
 void ApplyPipelineCreationFeedback(ErrorContext *context,
                                    const VkPipelineCreationFeedback &feedback);
 
@@ -1355,6 +1404,41 @@ angle::Result SetDebugUtilsObjectName(ContextVk *contextVk,
                                       uint64_t handle,
                                       const std::string &label);
 
+// This defines enum for VkPipelineStageFlagBits so that we can use it to compare and index into
+// array.
+enum class PipelineStage : uint32_t
+{
+    // Bellow are ordered based on Graphics Pipeline Stages
+    TopOfPipe              = 0,
+    DrawIndirect           = 1,
+    VertexInput            = 2,
+    VertexShader           = 3,
+    TessellationControl    = 4,
+    TessellationEvaluation = 5,
+    GeometryShader         = 6,
+    TransformFeedback      = 7,
+    FragmentShadingRate    = 8,
+    EarlyFragmentTest      = 9,
+    FragmentShader         = 10,
+    LateFragmentTest       = 11,
+    ColorAttachmentOutput  = 12,
+
+    // Compute specific pipeline Stage
+    ComputeShader = 13,
+
+    // Transfer specific pipeline Stage
+    Transfer     = 14,
+    BottomOfPipe = 15,
+
+    // Host specific pipeline stage
+    Host = 16,
+
+    InvalidEnum = 17,
+    EnumCount   = InvalidEnum,
+};
+using PipelineStagesMask = angle::PackedEnumBitSet<PipelineStage, uint32_t>;
+
+PipelineStage GetPipelineStage(gl::ShaderType stage);
 }  // namespace vk
 
 #if !defined(ANGLE_SHARED_LIBVULKAN)
@@ -1407,14 +1491,29 @@ void InitDynamicRenderingLocalReadFunctions(VkDevice device);
 void InitFragmentShadingRateKHRInstanceFunction(VkInstance instance);
 void InitFragmentShadingRateKHRDeviceFunction(VkDevice device);
 
+// VK_KHR_maintenance5
+void InitMaintenance5Functions(VkDevice device);
+
 // VK_GOOGLE_display_timing
 void InitGetPastPresentationTimingGoogleFunction(VkDevice device);
 
 // VK_EXT_host_image_copy
 void InitHostImageCopyFunctions(VkDevice device);
 
+// VK_EXT_image_compression_control
+void InitImageCompressionControlFunctions(VkDevice device);
+
 // VK_KHR_Synchronization2
 void InitSynchronization2Functions(VkDevice device);
+
+// VK_KHR_external_memory_fd
+void InitExternalMemoryFdFunctions(VkDevice device);
+
+// VK_EXT_external_memory_host
+void InitExternalMemoryHostFunctions(VkDevice device);
+
+// VK_KHR_buffer_device_address
+void InitBufferDeviceAddressFunctions(VkDevice device);
 
 #endif  // !defined(ANGLE_SHARED_LIBVULKAN)
 
@@ -1427,6 +1526,10 @@ void InitGetMemoryRequirements2KHRFunctionsFromCore();
 void InitBindMemory2KHRFunctionsFromCore();
 
 GLenum CalculateGenerateMipmapFilter(ContextVk *contextVk, angle::FormatID formatID);
+
+bool HasRequiredGlobalPriority(
+    const std::vector<VkQueueFamilyGlobalPriorityPropertiesEXT> &globalPriorityProperties,
+    VkQueueGlobalPriorityEXT requiredGlobalPriority);
 
 namespace gl_vk
 {
@@ -1481,6 +1584,8 @@ vk::LevelIndex GetLevelIndex(gl::LevelIndex levelGL, gl::LevelIndex baseLevel);
 
 VkImageTiling GetTilingMode(gl::TilingMode tilingMode);
 
+VkFormat GetAstcDecodeMode(const GLenum astcDecodePrecision);
+
 VkImageCompressionFixedRateFlagsEXT ConvertEGLFixedRateToVkFixedRate(
     const EGLenum eglCompressionRate,
     const angle::FormatID actualFormatID);
@@ -1530,12 +1635,6 @@ enum class RenderPassClosureReason
     AlreadySpecifiedElsewhere,
 
     // Implicit closures due to flush/wait/etc.
-    ContextDestruction,
-    ContextChange,
-    GLFlush,
-    GLFinish,
-    EGLSwapBuffers,
-    EGLWaitClient,
     SurfaceUnMakeCurrent,
 
     // Closure due to switching rendering to another framebuffer.
@@ -1554,34 +1653,26 @@ enum class RenderPassClosureReason
     XfbWriteThenTextureBuffer,
 
     // Use of resource after render pass
-    BufferWriteThenMap,
     BufferWriteThenOutOfRPRead,
     BufferUseThenOutOfRPWrite,
     ImageUseThenOutOfRPRead,
     ImageUseThenOutOfRPWrite,
-    XfbWriteThenComputeRead,
+    XfbWriteThenUniformBufferRead,
     XfbWriteThenIndirectDispatchBuffer,
     ImageAttachmentThenComputeRead,
     GraphicsTextureImageAccessThenComputeAccess,
-    GetQueryResult,
     BeginNonRenderPassQuery,
     EndNonRenderPassQuery,
     TimestampQuery,
     EndRenderPassQuery,
-    GLReadPixels,
 
     // Synchronization
     BufferUseThenReleaseToExternal,
     ImageUseThenReleaseToExternal,
-    BufferInUseWhenSynchronizedMap,
     GLMemoryBarrierThenStorageResource,
     StorageResourceUseThenGLMemoryBarrier,
-    ExternalSemaphoreSignal,
     SyncObjectInit,
-    SyncObjectWithFdInit,
     SyncObjectClientWait,
-    SyncObjectServerWait,
-    SyncObjectGetStatus,
     ForeignImageRelease,
 
     // Closures that ANGLE could have avoided, but doesn't for simplicity or optimization of more
@@ -1592,7 +1683,6 @@ enum class RenderPassClosureReason
     GenerateMipmapOnCPU,
     CopyTextureOnCPU,
     TextureReformatToRenderable,
-    DeviceLocalBufferMap,
     OutOfReservedQueueSerialForOutsideCommands,
 
     // UtilsVk
@@ -1607,9 +1697,68 @@ enum class RenderPassClosureReason
     // LegacyDithering requires updating the render pass
     LegacyDithering,
 
+    // Flushing and submitting the command buffer requires render pass closure.
+    SubmitCommands,
+
+    InvalidEnum,
+    EnumCount = InvalidEnum,
+};
+
+enum class QueueSubmitReason
+{
+    // Flush/Finish/Wait
+    EGLSwapBuffers,
+    EGLWaitClient,
+    GLFinish,
+    GLFlush,
+    GLReadPixels,
+
+    // Context/Surface
+    AcquireNextImage,
+    ContextChange,
+    ContextDestruction,
+    ContextPriorityChange,
+    SurfaceUnMakeCurrent,
+
+    // Buffer/Image
+    CopyBufferToImageOneOff,
+    CopyBufferToSurfaceImage,
+    CopySurfaceImageToBuffer,
+    ForeignImageRelease,
+    ImageUseThenReleaseToExternal,
+    InitNonZeroMemory,
+    TextureReformatToRenderable,
+    CopyTextureOnCPU,
+    GenerateMipmapOnCPU,
+
+    // Sync/Query/Timestamp
+    ExternalSemaphoreSignal,
+    GetQueryResult,
+    GetTimestamp,
+    SyncCPUGPUTime,
+    SyncObjectInit,
+    SyncObjectClientWait,
+    SyncObjectWithFdInit,
+    DeviceLocalBufferMap,
+    BufferWriteThenMap,
+    BufferInUseWhenSynchronizedMap,
+    WaitSemaphore,
+
     // In case of memory budget issues, pending garbage needs to be freed.
     ExcessivePendingGarbage,
     OutOfMemory,
+
+    // In case of reaching the render pass limit in the command buffer, it should be submitted.
+    RenderPassCountLimitReached,
+    RenderPassCommandLimitReached,
+
+    // Outside command buffer submission
+    BufferToImageUpdateLimitReached,
+    ForceSubmitStagedTexture,
+
+    // Others
+    DeferredFlush,
+    DrawOverlay,
 
     InvalidEnum,
     EnumCount = InvalidEnum,

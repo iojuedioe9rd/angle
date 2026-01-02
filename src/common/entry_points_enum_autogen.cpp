@@ -70,6 +70,8 @@ const char *GetEntryPointName(EntryPoint ep)
             return "clCreateSubDevices";
         case EntryPoint::CLCreateUserEvent:
             return "clCreateUserEvent";
+        case EntryPoint::CLEnqueueAcquireExternalMemObjectsKHR:
+            return "clEnqueueAcquireExternalMemObjectsKHR";
         case EntryPoint::CLEnqueueBarrier:
             return "clEnqueueBarrier";
         case EntryPoint::CLEnqueueBarrierWithWaitList:
@@ -108,6 +110,8 @@ const char *GetEntryPointName(EntryPoint ep)
             return "clEnqueueReadBufferRect";
         case EntryPoint::CLEnqueueReadImage:
             return "clEnqueueReadImage";
+        case EntryPoint::CLEnqueueReleaseExternalMemObjectsKHR:
+            return "clEnqueueReleaseExternalMemObjectsKHR";
         case EntryPoint::CLEnqueueSVMFree:
             return "clEnqueueSVMFree";
         case EntryPoint::CLEnqueueSVMMap:
@@ -182,8 +186,12 @@ const char *GetEntryPointName(EntryPoint ep)
             return "clGetSamplerInfo";
         case EntryPoint::CLGetSupportedImageFormats:
             return "clGetSupportedImageFormats";
+        case EntryPoint::CLIcdGetFunctionAddressForPlatformKHR:
+            return "clIcdGetFunctionAddressForPlatformKHR";
         case EntryPoint::CLIcdGetPlatformIDsKHR:
             return "clIcdGetPlatformIDsKHR";
+        case EntryPoint::CLIcdSetPlatformDispatchDataKHR:
+            return "clIcdSetPlatformDispatchDataKHR";
         case EntryPoint::CLLinkProgram:
             return "clLinkProgram";
         case EntryPoint::CLReleaseCommandQueue:
@@ -950,6 +958,8 @@ const char *GetEntryPointName(EntryPoint ep)
             return "glFramebufferRenderbuffer";
         case EntryPoint::GLFramebufferRenderbufferOES:
             return "glFramebufferRenderbufferOES";
+        case EntryPoint::GLFramebufferShadingRateEXT:
+            return "glFramebufferShadingRateEXT";
         case EntryPoint::GLFramebufferTexture:
             return "glFramebufferTexture";
         case EntryPoint::GLFramebufferTexture2D:
@@ -964,6 +974,8 @@ const char *GetEntryPointName(EntryPoint ep)
             return "glFramebufferTextureEXT";
         case EntryPoint::GLFramebufferTextureLayer:
             return "glFramebufferTextureLayer";
+        case EntryPoint::GLFramebufferTextureMultisampleMultiviewOVR:
+            return "glFramebufferTextureMultisampleMultiviewOVR";
         case EntryPoint::GLFramebufferTextureMultiviewOVR:
             return "glFramebufferTextureMultiviewOVR";
         case EntryPoint::GLFramebufferTextureOES:
@@ -1076,6 +1088,8 @@ const char *GetEntryPointName(EntryPoint ep)
             return "glGetFragDataIndexEXT";
         case EntryPoint::GLGetFragDataLocation:
             return "glGetFragDataLocation";
+        case EntryPoint::GLGetFragmentShadingRatesEXT:
+            return "glGetFragmentShadingRatesEXT";
         case EntryPoint::GLGetFramebufferAttachmentParameteriv:
             return "glGetFramebufferAttachmentParameteriv";
         case EntryPoint::GLGetFramebufferAttachmentParameterivOES:
@@ -1872,6 +1886,10 @@ const char *GetEntryPointName(EntryPoint ep)
             return "glShaderBinary";
         case EntryPoint::GLShaderSource:
             return "glShaderSource";
+        case EntryPoint::GLShadingRateCombinerOpsEXT:
+            return "glShadingRateCombinerOpsEXT";
+        case EntryPoint::GLShadingRateEXT:
+            return "glShadingRateEXT";
         case EntryPoint::GLShadingRateQCOM:
             return "glShadingRateQCOM";
         case EntryPoint::GLSignalSemaphoreEXT:

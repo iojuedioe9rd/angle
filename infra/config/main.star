@@ -6,22 +6,15 @@
 #
 # main.star: lucicfg configuration for ANGLE's standalone builders.
 
-lucicfg.check_version(min = "1.31.3", message = "Update depot_tools")
+"""
+main.star: lucicfg configuration for Angle's standalone builders.
+"""
 
 # Use LUCI Scheduler BBv2 names and add Scheduler realms configs.
 lucicfg.enable_experiment("crbug.com/1182002")
 
 # Fail build when merge script fails.
 build_experiments = {"chromium_swarming.expose_merge_script_failures": 100}
-
-lucicfg.config(
-    fail_on_warnings = True,
-    lint_checks = [
-        "default",
-        "-module-docstring",
-        "-function-docstring",
-    ],
-)
 
 luci.project(
     name = "angle",
@@ -142,7 +135,7 @@ _DEFAULT_BUILDERLESS_OS_CATEGORIES = [os_category.LINUX, os_category.WINDOWS, os
 _CHROMIUM_POOL_OS_CATEGORIES = [os_category.MAC]
 
 def _recipe_for_package(cipd_package):
-    def recipe(*, name, cipd_version = None, recipe = None, use_python3 = False):
+    def recipe(*, name, cipd_version = None, recipe = None):
         # Force the caller to put the recipe prefix rather than adding it
         # programatically to make the string greppable
         if not name.startswith(_RECIPE_NAME_PREFIX):
@@ -156,7 +149,6 @@ def _recipe_for_package(cipd_package):
             cipd_version = cipd_version,
             recipe = recipe,
             use_bbagent = True,
-            use_python3 = use_python3,
         )
 
     return recipe
@@ -167,15 +159,21 @@ build_recipe = _recipe_for_package(
 
 build_recipe(
     name = "recipe:angle",
-    use_python3 = True,
 )
 
 build_recipe(
     name = "recipe:run_presubmit",
-    use_python3 = True,
 )
 
 def get_os_from_name(name):
+    """Returns os enum given the name.
+
+    Args:
+        name: A name to check against.
+
+    Returns:
+        An os enum given the name.
+    """
     if name.startswith("android"):
         return os.ANDROID
     if name.startswith("linux"):
@@ -191,6 +189,12 @@ def get_gpu_type_from_builder_name(name):
 
 # Adds both the CI and Try standalone builders.
 def angle_builder(name, cpu):
+    """Adds a CI and Try standalone builder.
+
+    Args:
+        name: string representing name of the builder.
+        cpu: string representing CPU archiecture of builder.
+    """
     config_os = get_os_from_name(name)
     dimensions = {}
     dimensions["os"] = config_os.dimension
@@ -214,7 +218,9 @@ def angle_builder(name, cpu):
     is_tsan = "-tsan" in name
     is_debug = "-dbg" in name
     is_exp = "-exp" in name
+    is_ir = "-ir" in name
     is_perf = name.endswith("-perf")
+    is_pixel10 = "pixel10" in name
     is_s24 = "s24" in name
     is_trace = name.endswith("-trace")
     is_uwp = "winuwp" in name
@@ -222,6 +228,8 @@ def angle_builder(name, cpu):
 
     location_filters = None
 
+    test_mode = ""
+    category = ""
     if name.endswith("-compile"):
         test_mode = "compile_only"
         category = "compile"
@@ -276,49 +284,39 @@ def angle_builder(name, cpu):
         if is_s24:
             # This is a little clunky, but we'd like this to be cleanly "s24" rather than "s24-exp"
             short_name = "s24"
+        elif is_pixel10:
+            short_name = "p10"
+    elif is_ir:
+        short_name = "ir"
     else:
         short_name = "rel"
 
     properties = {
-        "builder_group": "angle",
-        # TODO: crbug.com/401959048 - Remove reclient props after migration.
-        "$build/reclient": {
-            "instance": "rbe-chromium-untrusted",
-            "metrics_project": "chromium-reclient-metrics",
-            "scandeps_server": True,
-        },
         "$build/siso": {
-            "project": "rbe-chromium-untrusted",
             "configs": ["builder"],
             "enable_cloud_monitoring": True,
             "enable_cloud_profiler": True,
             "enable_cloud_trace": True,
-            "metrics_project": "chromium-reclient-metrics",
+            "project": "rbe-chromium-untrusted",
         },
+        "builder_group": "angle",
         "platform": config_os.console_name,
-        "toolchain": toolchain,
         "test_mode": test_mode,
+        "toolchain": toolchain,
     }
 
     ci_properties = {
-        "builder_group": "angle",
-        # TODO: crbug.com/401959048 - Remove reclient props after migration.
-        "$build/reclient": {
-            "instance": "rbe-chromium-trusted",
-            "metrics_project": "chromium-reclient-metrics",
-            "scandeps_server": True,
-        },
         "$build/siso": {
-            "project": "rbe-chromium-trusted",
             "configs": ["builder"],
             "enable_cloud_monitoring": True,
             "enable_cloud_profiler": True,
             "enable_cloud_trace": True,
-            "metrics_project": "chromium-reclient-metrics",
+            "project": "rbe-chromium-trusted",
         },
+        "builder_group": "angle",
         "platform": config_os.console_name,
-        "toolchain": toolchain,
         "test_mode": test_mode,
+        "toolchain": toolchain,
     }
 
     # TODO(343503161): Remove sheriff_rotations after SoM is updated.
@@ -355,13 +353,13 @@ def angle_builder(name, cpu):
 
     active_experimental_builders = [
         "android-arm64-exp-test",
+        "android-arm64-exp-pixel10-test",
         "android-arm64-exp-s24-test",
-        "linux-exp-test",
-        "mac-exp-test",
-        "win-exp-test",
+        "mac-exp-test",  # temporarily used for AMD Radeon Pro 555X
+        "win-exp-test",  # temporarily used for Intel UHD770
     ]
 
-    if (not is_exp) or (name in active_experimental_builders):
+    if (not is_exp and not is_ir) or (name in active_experimental_builders):
         luci.console_view_entry(
             console_view = "ci",
             builder = "ci/" + name,
@@ -384,8 +382,8 @@ def angle_builder(name, cpu):
         max_concurrent_builds = None
 
         # Don't add experimental bots to CQ.
-        # Also exclude mac-arm64-test for now anglebug.com/42266214
-        add_to_cq = (not is_exp and not name == "mac-arm64-test")
+        # IR bots are also experimental currently.
+        add_to_cq = (not is_exp and not is_ir)
         if migrated_to_chromium_pool:
             if add_to_cq:
                 max_concurrent_builds = 5
@@ -410,7 +408,6 @@ def angle_builder(name, cpu):
         )
 
         # Don't add experimental bots to CQ.
-        # Also exclude mac-arm64-test for now anglebug.com/42266214
         if add_to_cq:
             luci.cq_tryjob_verifier(
                 cq_group = "main",
@@ -553,8 +550,10 @@ luci.gitiles_poller(
 angle_builder("android-arm-compile", cpu = "arm")
 angle_builder("android-arm-dbg-compile", cpu = "arm")
 angle_builder("android-arm64-dbg-compile", cpu = "arm64")
+angle_builder("android-arm64-exp-pixel10-test", cpu = "arm64")
 angle_builder("android-arm64-exp-s24-test", cpu = "arm64")
 angle_builder("android-arm64-exp-test", cpu = "arm64")
+angle_builder("android-arm64-ir-test", cpu = "arm64")
 angle_builder("android-arm64-test", cpu = "arm64")
 angle_builder("linux-asan-test", cpu = "x64")
 angle_builder("linux-exp-asan-test", cpu = "x64")
@@ -562,10 +561,12 @@ angle_builder("linux-exp-test", cpu = "x64")
 angle_builder("linux-exp-tsan-test", cpu = "x64")
 angle_builder("linux-tsan-test", cpu = "x64")
 angle_builder("linux-dbg-compile", cpu = "x64")
+angle_builder("linux-ir-test", cpu = "x64")
 angle_builder("linux-test", cpu = "x64")
 angle_builder("mac-dbg-compile", cpu = "x64")
 angle_builder("mac-arm64-test", cpu = "arm64")
 angle_builder("mac-exp-test", cpu = "x64")
+angle_builder("mac-ir-test", cpu = "x64")
 angle_builder("mac-test", cpu = "x64")
 angle_builder("win-asan-test", cpu = "x64")
 angle_builder("win-dbg-compile", cpu = "x64")
@@ -574,6 +575,7 @@ angle_builder("win-msvc-compile", cpu = "x64")
 angle_builder("win-msvc-dbg-compile", cpu = "x64")
 angle_builder("win-msvc-x86-compile", cpu = "x86")
 angle_builder("win-msvc-x86-dbg-compile", cpu = "x86")
+angle_builder("win-ir-test", cpu = "x64")
 angle_builder("win-test", cpu = "x64")
 angle_builder("win-x86-dbg-compile", cpu = "x86")
 angle_builder("win-x86-test", cpu = "x86")

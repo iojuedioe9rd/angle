@@ -6,6 +6,10 @@
 
 // TextureGL.cpp: Implements the class methods for TextureGL.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/TextureGL.h"
 
 #include "common/bitset_utils.h"
@@ -1847,7 +1851,6 @@ angle::Result TextureGL::syncState(const gl::Context *context,
                 break;
             case gl::Texture::DIRTY_BIT_BOUND_AS_IMAGE:
             case gl::Texture::DIRTY_BIT_BOUND_AS_ATTACHMENT:
-            case gl::Texture::DIRTY_BIT_BOUND_TO_MSRTT_FRAMEBUFFER:
                 // Only used for Vulkan.
                 break;
 
@@ -2292,10 +2295,9 @@ angle::Result TextureGL::initializeContents(const gl::Context *context,
     StateManagerGL *stateManager      = GetStateManagerGL(context);
     const angle::FeaturesGL &features = GetFeaturesGL(context);
 
-    bool shouldUseClear = !nativegl::SupportsTexImage(getType());
     GLenum nativeInternalFormat =
         getLevelInfo(imageIndex.getTarget(), imageIndex.getLevelIndex()).nativeInternalFormat;
-    if ((features.allowClearForRobustResourceInit.enabled || shouldUseClear) &&
+    if (features.allowClearForRobustResourceInit.enabled &&
         nativegl::SupportsNativeRendering(functions, mState.getType(), nativeInternalFormat))
     {
         BlitGL *blitter = GetBlitGL(context);

@@ -86,7 +86,7 @@ TEST_P(ErrorMessagesTest, ErrorMessages)
     constexpr GLenum severity  = GL_DEBUG_SEVERITY_HIGH;
     constexpr GLuint id1       = 1282;
     const std::string message1 =
-        std::string("glBindAttribLocation: ") + gl::err::kWebglBindAttribLocationReservedPrefix;
+        std::string("glBindAttribLocation: ") + gl::err::kNameStartsWithReservedPrefix;
     Message expectedMessage;
 
     GLint numMessages = 0;
@@ -107,16 +107,5 @@ TEST_P(ErrorMessagesTest, ErrorMessages)
     ASSERT_TRUE(m == expectedMessage);
 }
 
-// Use this to select which configurations (e.g. which renderer, which GLES major version) these
-// tests should be run against.
-ANGLE_INSTANTIATE_TEST(ErrorMessagesTest,
-                       ES2_D3D9(),
-                       ES2_D3D11(),
-                       ES3_D3D11(),
-                       ES2_METAL(),
-                       ES2_OPENGL(),
-                       ES3_OPENGL(),
-                       ES2_OPENGLES(),
-                       ES3_OPENGLES(),
-                       ES2_VULKAN());
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(ErrorMessagesTest);
 }  // namespace angle

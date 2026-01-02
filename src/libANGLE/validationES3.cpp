@@ -6,6 +6,10 @@
 
 // validationES3.cpp: Validation functions for OpenGL ES 3.0 entry point parameters
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/validationES3_autogen.h"
 
 #include "anglebase/numerics/safe_conversions.h"
@@ -36,20 +40,14 @@ void RecordVersionErrorES30(const Context *context, angle::EntryPoint entryPoint
 
 namespace
 {
-bool ValidateFramebufferTextureMultiviewBaseANGLE(const Context *context,
-                                                  angle::EntryPoint entryPoint,
-                                                  GLenum target,
-                                                  GLenum attachment,
-                                                  TextureID texture,
-                                                  GLint level,
-                                                  GLsizei numViews)
+bool ValidateFramebufferTextureMultiviewBase(const Context *context,
+                                             angle::EntryPoint entryPoint,
+                                             GLenum target,
+                                             GLenum attachment,
+                                             TextureID texture,
+                                             GLint level,
+                                             GLsizei numViews)
 {
-    if (!(context->getExtensions().multiviewOVR || context->getExtensions().multiview2OVR))
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kMultiviewNotAvailable);
-        return false;
-    }
-
     if (!ValidateFramebufferTextureBase(context, entryPoint, target, attachment, texture, level))
     {
         return false;
@@ -1469,6 +1467,12 @@ bool ValidateES3TexStorageParametersFormat(const Context *context,
         return false;
     }
 
+    if (formatInfo.paletted)
+    {
+        ANGLE_VALIDATION_ERRORF(GL_INVALID_ENUM, kInvalidInternalFormat, internalformat);
+        return false;
+    }
+
     if (formatInfo.compressed)
     {
         if (target == TextureType::Rectangle)
@@ -2010,7 +2014,8 @@ bool ValidateBindVertexArray(const Context *context,
     return ValidateBindVertexArrayBase(context, entryPoint, array);
 }
 
-bool ValidateIsVertexArray(const Context *context,
+bool ValidateIsVertexArray(const PrivateState &state,
+                           ErrorSet *errors,
                            angle::EntryPoint entryPoint,
                            VertexArrayID array)
 {
@@ -2832,7 +2837,7 @@ bool ValidateGenQueries(const Context *context,
                         GLsizei n,
                         const QueryID *queries)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, queries);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, queries);
 }
 
 bool ValidateDeleteQueries(const Context *context,
@@ -2840,7 +2845,7 @@ bool ValidateDeleteQueries(const Context *context,
                            GLsizei n,
                            const QueryID *queries)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, queries);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, queries);
 }
 
 bool ValidateGenSamplers(const Context *context,
@@ -2876,7 +2881,7 @@ bool ValidateGenTransformFeedbacks(const Context *context,
                                    GLsizei n,
                                    const TransformFeedbackID *ids)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, ids);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, ids);
 }
 
 bool ValidateDeleteTransformFeedbacks(const Context *context,
@@ -2884,7 +2889,7 @@ bool ValidateDeleteTransformFeedbacks(const Context *context,
                                       GLsizei n,
                                       const TransformFeedbackID *ids)
 {
-    if (!ValidateGenOrDelete(context, entryPoint, n, ids))
+    if (!ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, ids))
     {
         return false;
     }
@@ -2906,7 +2911,7 @@ bool ValidateGenVertexArrays(const Context *context,
                              GLsizei n,
                              const VertexArrayID *arrays)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, arrays);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, arrays);
 }
 
 bool ValidateDeleteVertexArrays(const Context *context,
@@ -2914,7 +2919,7 @@ bool ValidateDeleteVertexArrays(const Context *context,
                                 GLsizei n,
                                 const VertexArrayID *arrays)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, arrays);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n, arrays);
 }
 
 bool ValidateBeginTransformFeedback(const Context *context,
@@ -3451,7 +3456,7 @@ bool ValidateRenderbufferStorageMultisample(const Context *context,
 
     // The behavior is different than the ANGLE version, which would generate a GL_OUT_OF_MEMORY.
     const TextureCaps &formatCaps = context->getTextureCaps().get(internalformat);
-    if (static_cast<GLuint>(samples) > formatCaps.getMaxSamples())
+    if (static_cast<GLuint>(samples) > formatCaps.sampleCounts.getMaxSamples())
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kSamplesOutOfRange);
         return false;
@@ -3468,7 +3473,9 @@ bool ValidateVertexAttribIPointer(const Context *context,
                                   GLsizei stride,
                                   const void *pointer)
 {
-    if (!ValidateIntegerVertexFormat(context, entryPoint, index, size, type))
+    if (!ValidateIntegerVertexFormat(context->getPrivateState(), context->getPrivateStateCache(),
+                                     context->getMutableErrorSetForValidation(), entryPoint, index,
+                                     size, type))
     {
         return false;
     }
@@ -3605,6 +3612,11 @@ bool ValidateMultiDrawArraysInstancedANGLE(const Context *context,
             return false;
         }
     }
+    if (drawcount < 0)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
+        return false;
+    }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
     {
         if (!ValidateDrawArraysInstancedBase(context, entryPoint, mode, firsts[drawID],
@@ -3637,6 +3649,11 @@ bool ValidateMultiDrawElementsInstancedANGLE(const Context *context,
             return false;
         }
     }
+    if (drawcount < 0)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
+        return false;
+    }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
     {
         if (!ValidateDrawElementsInstancedBase(context, entryPoint, mode, counts[drawID], type,
@@ -3656,12 +3673,6 @@ bool ValidateDrawArraysInstancedBaseInstanceANGLE(const Context *context,
                                                   GLsizei instanceCount,
                                                   GLuint baseInstance)
 {
-    if (!context->getExtensions().baseVertexBaseInstanceANGLE)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kExtensionNotEnabled);
-        return false;
-    }
-
     return ValidateDrawArraysInstancedBase(context, entryPoint, mode, first, count, instanceCount,
                                            baseInstance);
 }
@@ -3676,12 +3687,6 @@ bool ValidateDrawElementsInstancedBaseVertexBaseInstanceANGLE(const Context *con
                                                               GLint baseVertex,
                                                               GLuint baseInstance)
 {
-    if (!context->getExtensions().baseVertexBaseInstanceANGLE)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kExtensionNotEnabled);
-        return false;
-    }
-
     return ValidateDrawElementsInstancedBase(context, entryPoint, mode, count, type, indices,
                                              instanceCount, baseInstance);
 }
@@ -3702,6 +3707,7 @@ bool ValidateMultiDrawArraysInstancedBaseInstanceANGLE(const Context *context,
     }
     if (drawcount < 0)
     {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
         return false;
     }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
@@ -3734,6 +3740,7 @@ bool ValidateMultiDrawElementsInstancedBaseVertexBaseInstanceANGLE(const Context
     }
     if (drawcount < 0)
     {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeDrawcount);
         return false;
     }
     for (GLsizei drawID = 0; drawID < drawcount; ++drawID)
@@ -3757,8 +3764,8 @@ bool ValidateFramebufferTextureMultiviewOVR(const Context *context,
                                             GLint baseViewIndex,
                                             GLsizei numViews)
 {
-    if (!ValidateFramebufferTextureMultiviewBaseANGLE(context, entryPoint, target, attachment,
-                                                      texture, level, numViews))
+    if (!ValidateFramebufferTextureMultiviewBase(context, entryPoint, target, attachment, texture,
+                                                 level, numViews))
     {
         return false;
     }
@@ -3811,6 +3818,56 @@ bool ValidateFramebufferTextureMultiviewOVR(const Context *context,
     return true;
 }
 
+bool ValidateFramebufferTextureMultisampleMultiviewOVR(const Context *context,
+                                                       angle::EntryPoint entryPoint,
+                                                       GLenum target,
+                                                       GLenum attachment,
+                                                       TextureID texturePacked,
+                                                       GLint level,
+                                                       GLsizei samples,
+                                                       GLint baseViewIndex,
+                                                       GLsizei numViews)
+{
+    // OVR_multiview_multisampled_render_to_texture states that <target>, <attachment>, <texture>,
+    // <level>, <baseViewIndex>, and <numViews> correspond to the same parameters for
+    // FramebufferTextureMultiviewOVR and have the same restrictions and errors.
+    if (!ValidateFramebufferTextureMultiviewOVR(context, entryPoint, target, attachment,
+                                                texturePacked, level, baseViewIndex, numViews))
+    {
+        return false;
+    }
+
+    // OVR_multiview_multisampled_render_to_texture states that the value of samples
+    // must be less than or equal to MAX_SAMPLES_EXT (Context::getCaps().maxSamples)
+    // otherwise GL_INVALID_VALUE is generated.
+    if (samples < 0 || samples > context->getCaps().maxSamples)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kSamplesOutOfRange);
+        return false;
+    }
+
+    // OVR_multiview_multisampled_render_to_texture says <samples> corresponds to the same parameter
+    // for FramebufferTexture2DMultisampleEXT and has the same restrictions and errors.
+    // EXT_multisampled_render_to_texture returns INVALID_OPERATION when a sample number higher than
+    // the maximum sample number supported by this format is passed.
+    // The getMaxSamples method is only guaranteed to be valid when the context is ES3.
+    if (texturePacked.value != 0 && context->getClientVersion() >= ES_3_0)
+    {
+        Texture *tex = context->getTexture(texturePacked);
+        GLenum sizedInternalFormat =
+            tex->getFormat(TextureTypeToTarget(tex->getType(), baseViewIndex), level)
+                .info->sizedInternalFormat;
+        const TextureCaps &formatCaps = context->getTextureCaps().get(sizedInternalFormat);
+        if (static_cast<GLuint>(samples) > formatCaps.sampleCounts.getMaxSamples())
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kSamplesOutOfRange);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool ValidateUniform1ui(const Context *context,
                         angle::EntryPoint entryPoint,
                         UniformLocation location,
@@ -3855,6 +3912,12 @@ bool ValidateUniform1uiv(const Context *context,
                          GLsizei count,
                          const GLuint *value)
 {
+    if (!ValidateUniformValuePointer(context, entryPoint, value))
+    {
+        // Error already generated.
+        return false;
+    }
+
     return ValidateUniform(context, entryPoint, GL_UNSIGNED_INT, location, count);
 }
 
@@ -3864,6 +3927,11 @@ bool ValidateUniform2uiv(const Context *context,
                          GLsizei count,
                          const GLuint *value)
 {
+    if (!ValidateUniformValuePointer(context, entryPoint, value))
+    {
+        // Error already generated.
+        return false;
+    }
     return ValidateUniform(context, entryPoint, GL_UNSIGNED_INT_VEC2, location, count);
 }
 
@@ -3873,6 +3941,11 @@ bool ValidateUniform3uiv(const Context *context,
                          GLsizei count,
                          const GLuint *value)
 {
+    if (!ValidateUniformValuePointer(context, entryPoint, value))
+    {
+        // Error already generated.
+        return false;
+    }
     return ValidateUniform(context, entryPoint, GL_UNSIGNED_INT_VEC3, location, count);
 }
 
@@ -3882,6 +3955,12 @@ bool ValidateUniform4uiv(const Context *context,
                          GLsizei count,
                          const GLuint *value)
 {
+    if (!ValidateUniformValuePointer(context, entryPoint, value))
+    {
+        // Error already generated.
+        return false;
+    }
+
     return ValidateUniform(context, entryPoint, GL_UNSIGNED_INT_VEC4, location, count);
 }
 
@@ -4202,6 +4281,12 @@ bool ValidateGetFragDataLocation(const Context *context,
         return false;
     }
 
+    if (name == nullptr)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInvalidFragDataNamePointer);
+        return false;
+    }
+
     return true;
 }
 
@@ -4338,6 +4423,12 @@ bool ValidateGetActiveUniformBlockName(const Context *context,
     if (uniformBlockIndex.value >= programObject->getExecutable().getUniformBlocks().size())
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kIndexExceedsMaxActiveUniformBlock);
+        return false;
+    }
+
+    if (uniformBlockName == nullptr)
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kUniformBlockNameNull);
         return false;
     }
 
@@ -4509,13 +4600,13 @@ bool ValidateBindSampler(const Context *context,
     return true;
 }
 
-bool ValidateVertexAttribDivisor(const Context *context,
+bool ValidateVertexAttribDivisor(const PrivateState &privateState,
+                                 ErrorSet *errors,
                                  angle::EntryPoint entryPoint,
                                  GLuint index,
                                  GLuint divisor)
 {
-    return ValidateVertexAttribIndex(context->getPrivateState(),
-                                     context->getMutableErrorSetForValidation(), entryPoint, index);
+    return ValidateVertexAttribIndex(privateState, errors, entryPoint, index);
 }
 
 bool ValidateTexStorage2D(const Context *context,
@@ -4622,7 +4713,7 @@ bool ValidateGetVertexAttribIiv(const Context *context,
                                 GLenum pname,
                                 const GLint *params)
 {
-    return ValidateGetVertexAttribBase(context, entryPoint, index, pname, nullptr, false, true);
+    return ValidateGetVertexAttribBase(context, entryPoint, index, pname, nullptr, false);
 }
 
 bool ValidateGetVertexAttribIuiv(const Context *context,
@@ -4631,7 +4722,7 @@ bool ValidateGetVertexAttribIuiv(const Context *context,
                                  GLenum pname,
                                  const GLuint *params)
 {
-    return ValidateGetVertexAttribBase(context, entryPoint, index, pname, nullptr, false, true);
+    return ValidateGetVertexAttribBase(context, entryPoint, index, pname, nullptr, false);
 }
 
 bool ValidateGetInternalformativ(const Context *context,

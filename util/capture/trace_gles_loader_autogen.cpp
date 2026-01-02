@@ -695,6 +695,10 @@ ANGLE_TRACE_LOADER_EXPORT PFNGLMULTIDRAWELEMENTSBASEVERTEXEXTPROC
 ANGLE_TRACE_LOADER_EXPORT PFNGLDRAWARRAYSINSTANCEDEXTPROC t_glDrawArraysInstancedEXT;
 ANGLE_TRACE_LOADER_EXPORT PFNGLDRAWELEMENTSINSTANCEDEXTPROC t_glDrawElementsInstancedEXT;
 ANGLE_TRACE_LOADER_EXPORT PFNGLBUFFERSTORAGEEXTERNALEXTPROC t_glBufferStorageExternalEXT;
+ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERSHADINGRATEEXTPROC t_glFramebufferShadingRateEXT;
+ANGLE_TRACE_LOADER_EXPORT PFNGLGETFRAGMENTSHADINGRATESEXTPROC t_glGetFragmentShadingRatesEXT;
+ANGLE_TRACE_LOADER_EXPORT PFNGLSHADINGRATECOMBINEROPSEXTPROC t_glShadingRateCombinerOpsEXT;
+ANGLE_TRACE_LOADER_EXPORT PFNGLSHADINGRATEEXTPROC t_glShadingRateEXT;
 ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERTEXTUREEXTPROC t_glFramebufferTextureEXT;
 ANGLE_TRACE_LOADER_EXPORT PFNGLVERTEXATTRIBDIVISOREXTPROC t_glVertexAttribDivisorEXT;
 ANGLE_TRACE_LOADER_EXPORT PFNGLFLUSHMAPPEDBUFFERRANGEEXTPROC t_glFlushMappedBufferRangeEXT;
@@ -872,6 +876,8 @@ ANGLE_TRACE_LOADER_EXPORT PFNGLGENVERTEXARRAYSOESPROC t_glGenVertexArraysOES;
 ANGLE_TRACE_LOADER_EXPORT PFNGLISVERTEXARRAYOESPROC t_glIsVertexArrayOES;
 ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC
     t_glFramebufferTextureMultiviewOVR;
+ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC
+    t_glFramebufferTextureMultisampleMultiviewOVR;
 ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERFOVEATIONCONFIGQCOMPROC
     t_glFramebufferFoveationConfigQCOM;
 ANGLE_TRACE_LOADER_EXPORT PFNGLFRAMEBUFFERFOVEATIONPARAMETERSQCOMPROC
@@ -1953,6 +1959,13 @@ void LoadTraceGLES(LoadProc loadProc)
         reinterpret_cast<PFNGLDRAWELEMENTSINSTANCEDEXTPROC>(loadProc("glDrawElementsInstancedEXT"));
     t_glBufferStorageExternalEXT =
         reinterpret_cast<PFNGLBUFFERSTORAGEEXTERNALEXTPROC>(loadProc("glBufferStorageExternalEXT"));
+    t_glFramebufferShadingRateEXT = reinterpret_cast<PFNGLFRAMEBUFFERSHADINGRATEEXTPROC>(
+        loadProc("glFramebufferShadingRateEXT"));
+    t_glGetFragmentShadingRatesEXT = reinterpret_cast<PFNGLGETFRAGMENTSHADINGRATESEXTPROC>(
+        loadProc("glGetFragmentShadingRatesEXT"));
+    t_glShadingRateCombinerOpsEXT = reinterpret_cast<PFNGLSHADINGRATECOMBINEROPSEXTPROC>(
+        loadProc("glShadingRateCombinerOpsEXT"));
+    t_glShadingRateEXT = reinterpret_cast<PFNGLSHADINGRATEEXTPROC>(loadProc("glShadingRateEXT"));
     t_glFramebufferTextureEXT =
         reinterpret_cast<PFNGLFRAMEBUFFERTEXTUREEXTPROC>(loadProc("glFramebufferTextureEXT"));
     t_glVertexAttribDivisorEXT =
@@ -2273,6 +2286,9 @@ void LoadTraceGLES(LoadProc loadProc)
         reinterpret_cast<PFNGLISVERTEXARRAYOESPROC>(loadProc("glIsVertexArrayOES"));
     t_glFramebufferTextureMultiviewOVR = reinterpret_cast<PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC>(
         loadProc("glFramebufferTextureMultiviewOVR"));
+    t_glFramebufferTextureMultisampleMultiviewOVR =
+        reinterpret_cast<PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC>(
+            loadProc("glFramebufferTextureMultisampleMultiviewOVR"));
     t_glFramebufferFoveationConfigQCOM = reinterpret_cast<PFNGLFRAMEBUFFERFOVEATIONCONFIGQCOMPROC>(
         loadProc("glFramebufferFoveationConfigQCOM"));
     t_glFramebufferFoveationParametersQCOM =

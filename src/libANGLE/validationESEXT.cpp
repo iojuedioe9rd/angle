@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // validationESEXT.cpp: Validation functions for OpenGL ES extension entry points.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/validationESEXT_autogen.h"
 
@@ -150,7 +155,7 @@ bool ValidateObjectIdentifierAndName(const Context *context,
                 ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidType);
                 return false;
             }
-            if (context->getVertexArray({name}) == nullptr)
+            if (context->getPrivateState().getVertexArray({name}) == nullptr)
             {
                 ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kInvalidVertexArrayName);
                 return false;
@@ -158,7 +163,8 @@ bool ValidateObjectIdentifierAndName(const Context *context,
             return true;
 
         case GL_QUERY_OBJECT_EXT:
-            if (!isGLES3 && !context->getExtensions().occlusionQueryBooleanEXT)
+            if (!isGLES3 && !(context->getExtensions().disjointTimerQueryEXT ||
+                              context->getExtensions().occlusionQueryBooleanEXT))
             {
                 ANGLE_VALIDATION_ERROR(GL_INVALID_ENUM, kInvalidType);
                 return false;
@@ -653,16 +659,7 @@ bool ValidateMultiDrawElementsIndirectEXT(const Context *context,
     {
         // EXT_geometry_shader allows transform feedback to work with all draw commands.
         // [EXT_geometry_shader] Section 12.1, "Transform Feedback"
-        if (context->getExtensions().geometryShaderAny() || context->getClientVersion() >= ES_3_2)
-        {
-            if (!ValidateTransformFeedbackPrimitiveMode(
-                    context, entryPoint, curTransformFeedback->getPrimitiveMode(), modePacked))
-            {
-                ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kInvalidDrawModeTransformFeedback);
-                return false;
-            }
-        }
-        else
+        if (!context->getExtensions().geometryShaderAny() && context->getClientVersion() < ES_3_2)
         {
             // An INVALID_OPERATION error is generated if transform feedback is active and not
             // paused.
@@ -1091,12 +1088,6 @@ bool ValidateGetInteger64vEXT(const Context *context,
                               GLenum pname,
                               const GLint64 *data)
 {
-    if (!context->getExtensions().disjointTimerQueryEXT)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kExtensionNotEnabled);
-        return false;
-    }
-
     GLenum nativeType      = GL_NONE;
     unsigned int numParams = 0;
     if (!ValidateStateQuery(context, entryPoint, pname, &nativeType, &numParams))
@@ -1169,7 +1160,8 @@ bool ValidateCreateMemoryObjectsEXT(const Context *context,
                                     GLsizei n,
                                     const MemoryObjectID *memoryObjects)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, memoryObjects);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               memoryObjects);
 }
 
 bool ValidateDeleteMemoryObjectsEXT(const Context *context,
@@ -1177,7 +1169,8 @@ bool ValidateDeleteMemoryObjectsEXT(const Context *context,
                                     GLsizei n,
                                     const MemoryObjectID *memoryObjects)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, memoryObjects);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               memoryObjects);
 }
 
 bool ValidateGetMemoryObjectParameterivEXT(const Context *context,
@@ -1334,7 +1327,8 @@ bool ValidateDeleteSemaphoresEXT(const Context *context,
                                  GLsizei n,
                                  const SemaphoreID *semaphores)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, semaphores);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               semaphores);
 }
 
 bool ValidateGenSemaphoresEXT(const Context *context,
@@ -1342,7 +1336,8 @@ bool ValidateGenSemaphoresEXT(const Context *context,
                               GLsizei n,
                               const SemaphoreID *semaphores)
 {
-    return ValidateGenOrDelete(context, entryPoint, n, semaphores);
+    return ValidateGenOrDelete(context->getMutableErrorSetForValidation(), entryPoint, n,
+                               semaphores);
 }
 
 bool ValidateGetSemaphoreParameterui64vEXT(const Context *context,
@@ -1894,6 +1889,7 @@ bool ValidatePLSInternalformat(const Context *context,
         case GL_RGBA8I:
         case GL_RGBA8UI:
         case GL_R32F:
+        case GL_R32I:
         case GL_R32UI:
             return true;
         default:
@@ -2033,6 +2029,13 @@ bool ValidateFramebufferMemorylessPixelLocalStorageANGLE(const Context *context,
         {
             return false;
         }
+
+        // INVALID_OPERATION is generated if <internalformat> is not NONE and not color-renderable.
+        if (!context->getTextureCaps().get(internalformat).textureAttachment)
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kFormatNotRenderable);
+            return false;
+        }
     }
 
     return true;
@@ -2112,6 +2115,14 @@ bool ValidateFramebufferTexturePixelLocalStorageANGLE(const Context *context,
         GLenum internalformat = tex->getState().getBaseLevelDesc().format.info->internalFormat;
         if (!ValidatePLSInternalformat(context, entryPoint, internalformat))
         {
+            return false;
+        }
+
+        // INVALID_OPERATION is generated if <backingtexture> is nonzero and its internalformat
+        // is not color-renderable.
+        if (!context->getTextureCaps().get(internalformat).textureAttachment)
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kFormatNotRenderable);
             return false;
         }
     }
@@ -2797,6 +2808,119 @@ bool ValidateBufferStorageExternalEXT(const Context *context,
     return true;
 }
 
+// GL_EXT_fragment_shading_rate
+bool ValidateFramebufferShadingRateEXT(const Context *context,
+                                       angle::EntryPoint entryPoint,
+                                       GLenum target,
+                                       GLenum attachment,
+                                       GLuint texture,
+                                       GLint baseLayer,
+                                       GLsizei numLayers,
+                                       GLsizei texelWidth,
+                                       GLsizei texelHeight)
+{
+    return false;
+}
+
+bool ValidateGetFragmentShadingRatesEXT(const Context *context,
+                                        angle::EntryPoint entryPoint,
+                                        GLsizei samples,
+                                        GLsizei maxCount,
+                                        const GLsizei *count,
+                                        const GLenum *shadingRates)
+{
+    // If a negative number is provided where an argument of type sizei or
+    // sizeiptr is specified, an INVALID_VALUE error is generated.
+    if ((samples < 0) || (maxCount < 0))
+    {
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeSize);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateShadingRateEXT(const PrivateState &state,
+                            ErrorSet *errors,
+                            angle::EntryPoint entryPoint,
+                            ShadingRate ratePacked)
+{
+    // INVALID_ENUM is generated by ShadingRateEXT if <rate> is not a valid shading rate.
+    if (ratePacked == gl::ShadingRate::Undefined || ratePacked == gl::ShadingRate::InvalidEnum)
+    {
+        errors->validationError(entryPoint, GL_INVALID_ENUM, kInvalidShadingRate);
+        return false;
+    }
+
+    return true;
+}
+
+bool ValidateShadingRateCombinerOpsEXT(const PrivateState &state,
+                                       ErrorSet *errors,
+                                       angle::EntryPoint entryPoint,
+                                       CombinerOp combinerOp0Packed,
+                                       CombinerOp combinerOp1Packed)
+{
+
+    // An INVALID_ENUM error is generated if <combinerOp0>/<combinerOp1> is not
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT,
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT,
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_EXT,
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_EXT or
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_EXT
+    if (combinerOp0Packed == gl::CombinerOp::Undefined ||
+        combinerOp0Packed == gl::CombinerOp::InvalidEnum ||
+        combinerOp1Packed == gl::CombinerOp::Undefined ||
+        combinerOp1Packed == gl::CombinerOp::InvalidEnum)
+    {
+        errors->validationError(entryPoint, GL_INVALID_ENUM, kInvalidShadingCombinerOp);
+        return false;
+    }
+
+    // An INVALID_OPERATION error is generated if the value of
+    // FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT
+    // is FALSE and <combinerOp0>/<combinerOp1> is not
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT or
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT
+    if (!state.getCaps()
+             .fragmentShadingRateProperties.fragmentShadingRateNonTrivialCombinersSupport)
+    {
+        if ((combinerOp0Packed != gl::CombinerOp::Keep &&
+             combinerOp0Packed != gl::CombinerOp::Replace) ||
+            (combinerOp1Packed != gl::CombinerOp::Keep &&
+             combinerOp1Packed != gl::CombinerOp::Replace))
+        {
+            errors->validationError(entryPoint, GL_INVALID_OPERATION, kInvalidShadingCombinerOp);
+            return false;
+        }
+    }
+
+    // If GL_EXT_fragment_shading_rate_primitive is not supported
+    // An INVALID_OPERATION error is generated if <combinerOp0> is not
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT
+    if (!state.getExtensions().fragmentShadingRatePrimitiveEXT)
+    {
+        if (combinerOp0Packed != gl::CombinerOp::Keep)
+        {
+            errors->validationError(entryPoint, GL_INVALID_OPERATION, kInvalidShadingCombinerOp);
+            return false;
+        }
+    }
+
+    // If GL_EXT_fragment_shading_rate_attachment is not supported
+    // An INVALID_OPERATION error is generated if <combinerOp1> is not
+    // FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT
+    if (!state.getExtensions().fragmentShadingRateAttachmentEXT)
+    {
+        if (combinerOp1Packed != gl::CombinerOp::Keep)
+        {
+            errors->validationError(entryPoint, GL_INVALID_OPERATION, kInvalidShadingCombinerOp);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // GL_ANGLE_polygon_mode
 bool ValidatePolygonModeANGLE(const PrivateState &state,
                               ErrorSet *errors,
@@ -2919,7 +3043,7 @@ bool ValidateCreateShaderProgramvEXT(const Context *context,
                                      angle::EntryPoint entryPoint,
                                      ShaderType typePacked,
                                      GLsizei count,
-                                     const GLchar **strings)
+                                     const GLchar *const *strings)
 {
     return ValidateCreateShaderProgramvBase(context, entryPoint, typePacked, count, strings);
 }
@@ -3663,7 +3787,7 @@ bool ValidateGetPerfMonitorCounterInfoAMD(const Context *context,
                                           GLenum pname,
                                           const void *data)
 {
-    const angle::PerfMonitorCounterGroups &groups = context->getPerfMonitorCounterGroups();
+    const angle::PerfMonitorCounterGroupsInfo &groups = context->getPerfMonitorCounterGroups();
 
     if (group >= groups.size())
     {
@@ -3699,7 +3823,7 @@ bool ValidateGetPerfMonitorCounterStringAMD(const Context *context,
                                             const GLsizei *length,
                                             const GLchar *counterString)
 {
-    const angle::PerfMonitorCounterGroups &groups = context->getPerfMonitorCounterGroups();
+    const angle::PerfMonitorCounterGroupsInfo &groups = context->getPerfMonitorCounterGroups();
 
     if (group >= groups.size())
     {
@@ -3724,7 +3848,7 @@ bool ValidateGetPerfMonitorCountersAMD(const Context *context,
                                        GLsizei counterSize,
                                        const GLuint *counters)
 {
-    const angle::PerfMonitorCounterGroups &groups = context->getPerfMonitorCounterGroups();
+    const angle::PerfMonitorCounterGroupsInfo &groups = context->getPerfMonitorCounterGroups();
 
     if (group >= groups.size())
     {
@@ -3742,7 +3866,7 @@ bool ValidateGetPerfMonitorGroupStringAMD(const Context *context,
                                           const GLsizei *length,
                                           const GLchar *groupString)
 {
-    const angle::PerfMonitorCounterGroups &groups = context->getPerfMonitorCounterGroups();
+    const angle::PerfMonitorCounterGroupsInfo &groups = context->getPerfMonitorCounterGroups();
 
     if (group >= groups.size())
     {
@@ -3777,16 +3901,28 @@ bool ValidateSelectPerfMonitorCountersAMD(const Context *context,
 bool ValidateShadingRateQCOM(const PrivateState &state,
                              ErrorSet *errors,
                              angle::EntryPoint entryPoint,
-                             GLenum rate)
+                             ShadingRate ratePacked)
 {
-    gl::ShadingRate shadingRate = gl::FromGLenum<gl::ShadingRate>(rate);
-    if (shadingRate == gl::ShadingRate::Undefined || shadingRate == gl::ShadingRate::InvalidEnum)
+    // Allowed in the <rate> parameter in ShadingRateQCOM:
+    // SHADING_RATE_1X1_PIXELS_QCOM
+    // SHADING_RATE_1X2_PIXELS_QCOM
+    // SHADING_RATE_2X1_PIXELS_QCOM
+    // SHADING_RATE_2X2_PIXELS_QCOM
+    // SHADING_RATE_4X2_PIXELS_QCOM
+    // SHADING_RATE_4X4_PIXELS_QCOM
+    switch (ratePacked)
     {
-        errors->validationError(entryPoint, GL_INVALID_ENUM, kInvalidShadingRate);
-        return false;
+        case gl::ShadingRate::_1x1:
+        case gl::ShadingRate::_1x2:
+        case gl::ShadingRate::_2x1:
+        case gl::ShadingRate::_2x2:
+        case gl::ShadingRate::_4x2:
+        case gl::ShadingRate::_4x4:
+            return true;
+        default:
+            errors->validationError(entryPoint, GL_INVALID_ENUM, kInvalidShadingRate);
+            return false;
     }
-
-    return true;
 }
 
 bool ValidateLogicOpANGLE(const PrivateState &state,

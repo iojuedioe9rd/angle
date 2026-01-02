@@ -99,6 +99,12 @@ struct FrontendFeatures : FeatureSetBase
         &members,
     };
 
+    FeatureInfo useIr = {
+        "useIr",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
     FeatureInfo cacheCompiledShader = {
         "cacheCompiledShader",
         FeatureCategory::FrontendFeatures,
@@ -180,6 +186,30 @@ struct FrontendFeatures : FeatureSetBase
     FeatureInfo alwaysEnableEmulatedMultidrawExtensions = {
         "alwaysEnableEmulatedMultidrawExtensions",
         FeatureCategory::FrontendWorkarounds,
+        &members,
+    };
+
+    FeatureInfo forcePassthroughShaders = {
+        "forcePassthroughShaders",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
+    FeatureInfo clipCullDistanceBrokenWithPassthroughShaders = {
+        "clipCullDistanceBrokenWithPassthroughShaders",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
+    FeatureInfo noperspectiveInterpolationBrokenWithPassthroughShaders = {
+        "noperspectiveInterpolationBrokenWithPassthroughShaders",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
+    FeatureInfo forceDebugContexts = {
+        "forceDebugContexts",
+        FeatureCategory::FrontendFeatures,
         &members,
     };
 

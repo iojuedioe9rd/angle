@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// TracePerf:
+// TracePerfTest.cpp:
 //   Performance test for ANGLE replaying traces.
 //
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "tests/perf_tests/TracePerfTest.h"
 #include <gtest/gtest.h>
@@ -136,6 +140,7 @@ class TracePerfTest : public ANGLERenderTest
 
     bool loadTestExpectationsFromFileWithConfig(const GPUTestConfig &config,
                                                 const std::string &fileName);
+    void initializeConfigParams(GPUTestConfig::API api);
 
   private:
     struct QueryInfo
@@ -859,6 +864,27 @@ bool TracePerfTest::loadTestExpectationsFromFileWithConfig(const GPUTestConfig &
     return true;
 }
 
+void TracePerfTest::initializeConfigParams(GPUTestConfig::API api)
+{
+    // TODO (b/423678565): These config parameters will be overridden by ANGLERenderTest::SetUp().
+    ConfigParameters &configParams = getConfigParams();
+    configParams.redBits           = mParams->traceInfo.configRedBits;
+    configParams.greenBits         = mParams->traceInfo.configGreenBits;
+    configParams.blueBits          = mParams->traceInfo.configBlueBits;
+    configParams.alphaBits         = mParams->traceInfo.configAlphaBits;
+    configParams.depthBits         = mParams->traceInfo.configDepthBits;
+    configParams.stencilBits       = mParams->traceInfo.configStencilBits;
+    configParams.colorSpace        = mParams->traceInfo.drawSurfaceColorSpace;
+
+    // TODO (b/423680521): App traces shouldn't be relying on these extensions anyway, since they
+    // are not available when the real app is running on a real device, so these values should
+    // always match the defaults to begin with.
+    configParams.webGLCompatibility    = mParams->traceInfo.isWebGLCompatibilityEnabled;
+    configParams.robustResourceInit    = mParams->traceInfo.isRobustResourceInitEnabled;
+    configParams.bindGeneratesResource = mParams->traceInfo.isBindGeneratesResourcesEnabled;
+    configParams.clientArraysEnabled   = mParams->traceInfo.areClientArraysEnabled;
+}
+
 TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
     : ANGLERenderTest("TracePerf", *params.get(), "ms"),
       mParams(std::move(params)),
@@ -902,6 +928,8 @@ TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
         failTest("Failed to load trace json.");
         return;
     }
+
+    initializeConfigParams(api);
 
     for (std::string extension : mParams->traceInfo.requiredExtensions)
     {
@@ -1290,8 +1318,18 @@ TracePerfTest::TracePerfTest(std::unique_ptr<const TracePerfParams> params)
         addExtensionPrerequisite("GL_OES_framebuffer_object");
     }
 
-    // glDebugMessageControlKHR and glDebugMessageCallbackKHR crash on ARM GLES1.
-    if (IsARM() && mParams->traceInfo.contextClientMajorVersion == 1)
+    if (traceNameIs("minecraft_vibrant_visuals"))
+    {
+        addIntegerPrerequisite(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, 1024);
+    }
+
+    if (traceNameIs("love_and_deepspace"))
+    {
+        addIntegerPrerequisite(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, 6);
+    }
+
+    // GL_KHR_debug does not work on Android for GLES1
+    if (IsAndroid() && mParams->traceInfo.contextClientMajorVersion == 1)
     {
         mEnableDebugCallback = false;
     }
@@ -1575,19 +1613,6 @@ void TracePerfTest::drawBenchmark()
             buffer = 0;  // gles1: a single frame is rendered to buffer 0
         }
         bindFramebuffer(GL_FRAMEBUFFER, buffer);
-
-        GLsync sync = mOffscreenSyncs[offscreenBufferIndex];
-        if (sync)
-        {
-            constexpr GLuint64 kTimeout = 2'000'000'000;  // 2 seconds
-            GLenum result = glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, kTimeout);
-            if (result != GL_CONDITION_SATISFIED && result != GL_ALREADY_SIGNALED)
-            {
-                failTest(std::string("glClientWaitSync unexpected result: ") +
-                         std::to_string(result));
-            }
-            glDeleteSync(sync);
-        }
     }
 
     char frameName[32];
@@ -1596,10 +1621,21 @@ void TracePerfTest::drawBenchmark()
 
     startGpuTimer();
     atraceCounter("TraceFrameIndex", mCurrentFrame);
+
+    const double beginReplayFrameTimeSec = mTrialTimer.getElapsedWallClockTime();
     mTraceReplay->replayFrame(mCurrentFrame);
-    stopGpuTimer();
+    mFrameWallTimeSec += mTrialTimer.getElapsedWallClockTime() - beginReplayFrameTimeSec;
+
+    if (!gAddSwapIntoGPUTime)
+    {
+        stopGpuTimer();
+    }
 
     updatePerfCounters();
+
+    // Need to exclude potentially expensive calls above from the Frame Time.
+    const double beginSwapTimeSec =
+        gAddSwapIntoFrameWallTime ? mTrialTimer.getElapsedWallClockTime() : 0.0;
 
     if (mParams->surfaceType == SurfaceType::Offscreen)
     {
@@ -1671,7 +1707,6 @@ void TracePerfTest::drawBenchmark()
                     saveScreenshotIfEnabled(ScreenshotType::kGrid);
                 }
                 getGLWindow()->swap();
-                glClear(GL_COLOR_BUFFER_BIT);
                 mOffscreenFrameCount = 0;
             }
             else
@@ -1695,6 +1730,20 @@ void TracePerfTest::drawBenchmark()
                 bindFramebuffer(GL_READ_FRAMEBUFFER, currentReadFBO);
             }
 
+            // Wait for the next frame here to simulate the behaviour of the swap buffers call
+            GLsync sync = mOffscreenSyncs[(offscreenBufferIndex + 1) % mMaxOffscreenBufferCount];
+            if (sync)
+            {
+                constexpr GLuint64 kTimeout = 2'000'000'000;  // 2 seconds
+                GLenum result = glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, kTimeout);
+                if (result != GL_CONDITION_SATISFIED && result != GL_ALREADY_SIGNALED)
+                {
+                    failTest(std::string("glClientWaitSync unexpected result: ") +
+                             std::to_string(result));
+                }
+                glDeleteSync(sync);
+            }
+
             if (currentEglContext != mEglContext)
             {
                 eglMakeCurrent(eglGetCurrentDisplay(), eglGetCurrentSurface(EGL_DRAW),
@@ -1709,6 +1758,22 @@ void TracePerfTest::drawBenchmark()
         getGLWindow()->swap();
     }
 
+    if (gAddSwapIntoFrameWallTime)
+    {
+        const double endSwapTimeSec = mTrialTimer.getElapsedWallClockTime();
+        mFrameWallTimeSec += endSwapTimeSec - beginSwapTimeSec;
+    }
+
+    if (gAddSwapIntoGPUTime)
+    {
+        // No need flush here since swap already performs it implicitly and we already call flush
+        // in case of the offscreen test.
+        stopGpuTimer(false);
+        // Need this flush to submit the timestamp query to the GPU right now, instead of delaying
+        // it until some time later in the next frame.
+        glFlush();
+    }
+
     endInternalTraceEvent(frameName);
 
     mTotalFrameCount++;
@@ -1717,6 +1782,8 @@ void TracePerfTest::drawBenchmark()
     {
         mTraceReplay->resetReplay();
         mCurrentFrame = mStartFrame;
+        // Flush to avoid gpu_time tracking issues on some platforms (Native GLES Qualcomm).
+        glFlush();
     }
     else
     {

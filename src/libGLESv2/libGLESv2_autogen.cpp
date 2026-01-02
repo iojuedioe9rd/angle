@@ -3972,6 +3972,8 @@ void GL_APIENTRY glReleaseTexturesANGLE(GLuint numTextures, const GLuint *textur
 
 // GL_ARM_shader_framebuffer_fetch_depth_stencil
 
+// GL_ARM_texture_unnormalized_coordinates
+
 // GL_CHROMIUM_bind_uniform_location
 void GL_APIENTRY glBindUniformLocationCHROMIUM(GLuint program, GLint location, const GLchar *name)
 {
@@ -4397,6 +4399,37 @@ void GL_APIENTRY glBufferStorageExternalEXT(GLenum target,
 
 // GL_EXT_float_blend
 
+// GL_EXT_fragment_shading_rate
+void GL_APIENTRY glFramebufferShadingRateEXT(GLenum target,
+                                             GLenum attachment,
+                                             GLuint texture,
+                                             GLint baseLayer,
+                                             GLsizei numLayers,
+                                             GLsizei texelWidth,
+                                             GLsizei texelHeight)
+{
+    return GL_FramebufferShadingRateEXT(target, attachment, texture, baseLayer, numLayers,
+                                        texelWidth, texelHeight);
+}
+
+void GL_APIENTRY glGetFragmentShadingRatesEXT(GLsizei samples,
+                                              GLsizei maxCount,
+                                              GLsizei *count,
+                                              GLenum *shadingRates)
+{
+    return GL_GetFragmentShadingRatesEXT(samples, maxCount, count, shadingRates);
+}
+
+void GL_APIENTRY glShadingRateEXT(GLenum rate)
+{
+    return GL_ShadingRateEXT(rate);
+}
+
+void GL_APIENTRY glShadingRateCombinerOpsEXT(GLenum combinerOp0, GLenum combinerOp1)
+{
+    return GL_ShadingRateCombinerOpsEXT(combinerOp0, combinerOp1);
+}
+
 // GL_EXT_geometry_shader
 void GL_APIENTRY glFramebufferTextureEXT(GLenum target,
                                          GLenum attachment,
@@ -4723,7 +4756,9 @@ void GL_APIENTRY glBindProgramPipelineEXT(GLuint pipeline)
     return GL_BindProgramPipelineEXT(pipeline);
 }
 
-GLuint GL_APIENTRY glCreateShaderProgramvEXT(GLenum type, GLsizei count, const GLchar **strings)
+GLuint GL_APIENTRY glCreateShaderProgramvEXT(GLenum type,
+                                             GLsizei count,
+                                             const GLchar *const *strings)
 {
     return GL_CreateShaderProgramvEXT(type, count, strings);
 }
@@ -5394,6 +5429,8 @@ void GL_APIENTRY glBlitFramebufferNV(GLint srcX0,
                                 filter);
 }
 
+// GL_NV_pack_subimage
+
 // GL_NV_pixel_buffer_object
 
 // GL_NV_polygon_mode
@@ -6055,6 +6092,19 @@ void GL_APIENTRY glFramebufferTextureMultiviewOVR(GLenum target,
 }
 
 // GL_OVR_multiview2
+
+// GL_OVR_multiview_multisampled_render_to_texture
+void GL_APIENTRY glFramebufferTextureMultisampleMultiviewOVR(GLenum target,
+                                                             GLenum attachment,
+                                                             GLuint texture,
+                                                             GLint level,
+                                                             GLsizei samples,
+                                                             GLint baseViewIndex,
+                                                             GLsizei numViews)
+{
+    return GL_FramebufferTextureMultisampleMultiviewOVR(target, attachment, texture, level, samples,
+                                                        baseViewIndex, numViews);
+}
 
 // GL_QCOM_framebuffer_foveated
 void GL_APIENTRY glFramebufferFoveationConfigQCOM(GLuint framebuffer,

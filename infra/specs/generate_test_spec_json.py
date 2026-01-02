@@ -43,10 +43,13 @@ ADDITIONAL_MIXINS = {
             '--use-permissive-pixel-comparison=${use_permissive_angle_pixel_comparison}',
         ],
     },
+    'no_tombstones': {
+        'args': ['--do-not-store-tombstones',],
+    },
     'samsung_s24': {
         'swarming': {
             'dimensions': {
-                'device_os': 'UP1A.231005.007',
+                'device_os': 'AP3A.240905.015.A2',
                 'device_os_type': 'user',
                 'device_type': 's5e9945',
                 'os': 'Android'

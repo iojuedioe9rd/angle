@@ -7,6 +7,10 @@
 //    Implements the class methods for ContextMtl.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/metal/ContextMtl.h"
 
 #include <TargetConditionals.h>
@@ -123,20 +127,6 @@ bool NeedToInvertDepthRange(float near, float far)
 bool IsTransformFeedbackOnly(const gl::State &glState)
 {
     return glState.isTransformFeedbackActiveUnpaused() && glState.isRasterizerDiscardEnabled();
-}
-
-std::string ConvertMarkerToString(GLsizei length, const char *marker)
-{
-    std::string cppString;
-    if (length == 0)
-    {
-        cppString = marker;
-    }
-    else
-    {
-        cppString.assign(marker, length);
-    }
-    return cppString;
 }
 
 // This class constructs line loop's last segment buffer inside begin() method
@@ -1076,12 +1066,13 @@ gl::GraphicsResetStatus ContextMtl::getResetStatus()
 // EXT_debug_marker
 angle::Result ContextMtl::insertEventMarker(GLsizei length, const char *marker)
 {
+    mCmdBuffer.insertDebugSignpost(std::string(marker, length));
     return checkCommandBufferError();
 }
 
 angle::Result ContextMtl::pushGroupMarker(GLsizei length, const char *marker)
 {
-    mCmdBuffer.pushDebugGroup(ConvertMarkerToString(length, marker));
+    mCmdBuffer.pushDebugGroup(std::string(marker, length));
     return checkCommandBufferError();
 }
 
@@ -1522,9 +1513,10 @@ BufferImpl *ContextMtl::createBuffer(const gl::BufferState &state)
 }
 
 // Vertex Array creation
-VertexArrayImpl *ContextMtl::createVertexArray(const gl::VertexArrayState &state)
+VertexArrayImpl *ContextMtl::createVertexArray(const gl::VertexArrayState &state,
+                                               const gl::VertexArrayBuffers &vertexArrayBuffers)
 {
-    return new VertexArrayMtl(state, this);
+    return new VertexArrayMtl(state, vertexArrayBuffers, this);
 }
 
 // Query and Fence creation
@@ -1675,7 +1667,7 @@ void ContextMtl::invalidateState(const gl::Context *context)
 {
     mDirtyBits.set();
 
-    invalidateDefaultAttributes(context->getStateCache().getActiveDefaultAttribsMask());
+    invalidateDefaultAttributes(context->getActiveDefaultAttribsMask());
 }
 
 void ContextMtl::invalidateDefaultAttribute(size_t attribIndex)
@@ -1887,6 +1879,12 @@ angle::Result ContextMtl::finishCommandBuffer()
 {
     flushCommandBuffer(mtl::WaitUntilFinished);
     return checkCommandBufferError();
+}
+
+void ContextMtl::addCommandBufferScheduledCallback(std::function<void()> callback)
+{
+    mCmdBuffer.cmdQueue().addCommandBufferScheduledCallback(mCmdBuffer.getQueueSerial(),
+                                                            std::move(callback));
 }
 
 bool ContextMtl::hasStartedRenderPass(const mtl::RenderPassDesc &desc)
@@ -2405,7 +2403,7 @@ void ContextMtl::updateProgramExecutable(const gl::Context *context)
     // Need to rebind textures
     invalidateCurrentTextures();
     // Need to re-upload default attributes
-    invalidateDefaultAttributes(context->getStateCache().getActiveDefaultAttribsMask());
+    invalidateDefaultAttributes(context->getActiveDefaultAttribsMask());
     // Render pipeline need to be re-applied
     invalidateRenderPipeline();
 }
@@ -2414,7 +2412,7 @@ void ContextMtl::updateVertexArray(const gl::Context *context)
 {
     const gl::State &glState = getState();
     mVertexArray             = mtl::GetImpl(glState.getVertexArray());
-    invalidateDefaultAttributes(context->getStateCache().getActiveDefaultAttribsMask());
+    invalidateDefaultAttributes(context->getActiveDefaultAttribsMask());
     invalidateRenderPipeline();
 }
 
@@ -2530,7 +2528,7 @@ angle::Result ContextMtl::setupDrawImpl(const gl::Context *context,
     // instances=0 means no instanced draw.
     GLsizei instanceCount = instances ? instances : 1;
 
-    if (context->getStateCache().hasAnyActiveClientAttrib())
+    if (context->hasAnyActiveClientAttrib())
     {
         ANGLE_TRY(mVertexArray->updateClientAttribs(context, firstVertex, vertexOrIndexCount,
                                                     instanceCount, indexTypeOrNone, indices));

@@ -212,6 +212,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo usesSecondComponentForStencilBorderColor = {
+        "usesSecondComponentForStencilBorderColor",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
     FeatureInfo supportsMultiDrawIndirect = {
         "supportsMultiDrawIndirect",
         FeatureCategory::VulkanFeatures,
@@ -254,6 +260,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo supportsMultiviewMultisampleRenderToTexture = {
+        "supportsMultiviewMultisampleRenderToTexture",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
     FeatureInfo forceD16TexFilter = {
         "forceD16TexFilter",
         FeatureCategory::VulkanWorkarounds,
@@ -278,8 +290,14 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
-    FeatureInfo supportsExternalMemoryDmaBufAndModifiers = {
-        "supportsExternalMemoryDmaBufAndModifiers",
+    FeatureInfo supportsExternalMemoryDmaBuf = {
+        "supportsExternalMemoryDmaBuf",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsImageDrmFormatModifier = {
+        "supportsImageDrmFormatModifier",
         FeatureCategory::VulkanFeatures,
         &members,
     };
@@ -482,12 +500,6 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
-    FeatureInfo compressVertexData = {
-        "compressVertexData",
-        FeatureCategory::VulkanWorkarounds,
-        &members,
-    };
-
     FeatureInfo preferDrawClearOverVkCmdClearAttachments = {
         "preferDrawClearOverVkCmdClearAttachments",
         FeatureCategory::VulkanWorkarounds,
@@ -530,14 +542,14 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
-    FeatureInfo forceFragmentShaderPrecisionHighpToMediump = {
-        "forceFragmentShaderPrecisionHighpToMediump",
+    FeatureInfo preferSubmitAtFBOBoundary = {
+        "preferSubmitAtFBOBoundary",
         FeatureCategory::VulkanWorkarounds,
         &members,
     };
 
-    FeatureInfo preferSubmitAtFBOBoundary = {
-        "preferSubmitAtFBOBoundary",
+    FeatureInfo forceSubmitExceptionsAtFBOBoundary = {
+        "forceSubmitExceptionsAtFBOBoundary",
         FeatureCategory::VulkanWorkarounds,
         &members,
     };
@@ -734,6 +746,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo usePrimitiveTopologyDynamicState = {
+        "usePrimitiveTopologyDynamicState",
+        FeatureCategory::VulkanWorkarounds,
+        &members,
+    };
+
     FeatureInfo useDepthTestEnableDynamicState = {
         "useDepthTestEnableDynamicState",
         FeatureCategory::VulkanWorkarounds,
@@ -796,6 +814,12 @@ struct FeaturesVk : FeatureSetBase
 
     FeatureInfo supportsFragmentShadingRate = {
         "supportsFragmentShadingRate",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsPrimitiveFragmentShadingRate = {
+        "supportsPrimitiveFragmentShadingRate",
         FeatureCategory::VulkanFeatures,
         &members,
     };
@@ -974,6 +998,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo syncPipelineCacheToBlobCacheEveryFrame = {
+        "syncPipelineCacheToBlobCacheEveryFrame",
+        FeatureCategory::VulkanWorkarounds,
+        &members,
+    };
+
     FeatureInfo enableExtraSubmitFence = {
         "enableExtraSubmitFence",
         FeatureCategory::VulkanWorkarounds,
@@ -1124,6 +1154,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo allowHostImageCopyAfterInitialUpload = {
+        "allowHostImageCopyAfterInitialUpload",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
     FeatureInfo enableParallelCompileAndLink = {
         "enableParallelCompileAndLink",
         FeatureCategory::VulkanFeatures,
@@ -1252,6 +1288,12 @@ struct FeaturesVk : FeatureSetBase
 
     FeatureInfo useVkEventForBufferBarrier = {
         "useVkEventForBufferBarrier",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo isVertexSyncDeferred = {
+        "isVertexSyncDeferred",
         FeatureCategory::VulkanFeatures,
         &members,
     };
@@ -1436,6 +1478,18 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo supportsAstcDecodeMode = {
+        "supportsAstcDecodeMode",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsAstcDecodeModeRgb9e5 = {
+        "supportsAstcDecodeModeRgb9e5",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
     FeatureInfo supportsAstcHdr3dTextures = {
         "supportsAstcHdr3dTextures",
         FeatureCategory::VulkanFeatures,
@@ -1474,6 +1528,120 @@ struct FeaturesVk : FeatureSetBase
 
     FeatureInfo supportsSwapchainMutableFormat = {
         "supportsSwapchainMutableFormat",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsClipCullDistanceInGSAndTS = {
+        "supportsClipCullDistanceInGSAndTS",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsMaintenance9 = {
+        "supportsMaintenance9",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsShaderIntegerDotProduct = {
+        "supportsShaderIntegerDotProduct",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo convertLowpAndMediumpFloatUniformsTo16Bits = {
+        "convertLowpAndMediumpFloatUniformsTo16Bits",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsUnifiedImageLayouts = {
+        "supportsUnifiedImageLayouts",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsGlobalPriority = {
+        "supportsGlobalPriority",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsGlobalPriorityQuery = {
+        "supportsGlobalPriorityQuery",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsBufferDeviceAddress = {
+        "supportsBufferDeviceAddress",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo preferBGR565ToRGB565 = {
+        "preferBGR565ToRGB565",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo clSerializedExecution = {
+        "clSerializedExecution",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo externallySynchronizePipelineCacheAccess = {
+        "externallySynchronizePipelineCacheAccess",
+        FeatureCategory::VulkanWorkarounds,
+        &members,
+    };
+
+    FeatureInfo supportShaderPixelLocalStorageAngle = {
+        "supportShaderPixelLocalStorageAngle",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo debugClDumpCommandStream = {
+        "debugClDumpCommandStream",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsShaderAtomicInt64 = {
+        "supportsShaderAtomicInt64",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo forceSizePointerForBoundVertexBuffers = {
+        "forceSizePointerForBoundVertexBuffers",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportFragmentShadingRateExtExtensions = {
+        "supportFragmentShadingRateExtExtensions",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo dropDepthStencilClearOnInvalidate = {
+        "dropDepthStencilClearOnInvalidate",
+        FeatureCategory::VulkanWorkarounds,
+        &members,
+    };
+
+    FeatureInfo supportsTileMemoryHeap = {
+        "supportsTileMemoryHeap",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo simulateTileMemoryForTesting = {
+        "simulateTileMemoryForTesting",
         FeatureCategory::VulkanFeatures,
         &members,
     };

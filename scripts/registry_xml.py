@@ -79,7 +79,6 @@ angle_requestable_extensions = [
     "GL_CHROMIUM_color_buffer_float_rgb",
     "GL_CHROMIUM_color_buffer_float_rgba",
     "GL_CHROMIUM_lose_context",
-    "GL_CHROMIUM_sync_query",
 ]
 
 gles_requestable_extensions = [
@@ -91,6 +90,7 @@ gles_requestable_extensions = [
     "GL_ARM_rgba8",
     "GL_ARM_shader_framebuffer_fetch",
     "GL_ARM_shader_framebuffer_fetch_depth_stencil",
+    "GL_ARM_texture_unnormalized_coordinates",
     "GL_EXT_base_instance",
     "GL_EXT_blend_func_extended",
     "GL_EXT_blend_minmax",
@@ -116,6 +116,9 @@ gles_requestable_extensions = [
     "GL_EXT_external_buffer",
     "GL_EXT_float_blend",
     "GL_EXT_frag_depth",
+    "GL_EXT_fragment_shading_rate",
+    "GL_EXT_fragment_shading_rate_attachment",
+    "GL_EXT_fragment_shading_rate_primitive",
     "GL_EXT_geometry_shader",
     "GL_EXT_gpu_shader5",
     "GL_EXT_instanced_arrays",
@@ -128,6 +131,7 @@ gles_requestable_extensions = [
     "GL_EXT_multisampled_render_to_texture2",
     "GL_EXT_occlusion_query_boolean",
     "GL_EXT_polygon_offset_clamp",
+    "GL_EXT_primitive_bounding_box",
     "GL_EXT_protected_textures",
     "GL_EXT_pvrtc_sRGB",
     "GL_EXT_read_format_bgra",
@@ -213,6 +217,7 @@ gles_requestable_extensions = [
     "GL_OES_get_program_binary",
     "GL_OES_gpu_shader5",
     "GL_OES_mapbuffer",
+    "GL_OES_primitive_bounding_box",
     "GL_OES_required_internalformat",
     "GL_OES_rgb8_rgba8",
     "GL_OES_sample_shading",
@@ -239,6 +244,7 @@ gles_requestable_extensions = [
     "GL_OES_vertex_type_10_10_10_2",
     "GL_OVR_multiview",
     "GL_OVR_multiview2",
+    "GL_OVR_multiview_multisampled_render_to_texture",
     "GL_QCOM_framebuffer_foveated",
     "GL_QCOM_render_shared_exponent",
     "GL_QCOM_shading_rate",
@@ -276,7 +282,6 @@ gles_es_only_extensions = [
     "GL_EXT_debug_marker",
     "GL_EXT_discard_framebuffer",
     "GL_EXT_multisample_compatibility",
-    "GL_EXT_primitive_bounding_box",
     "GL_EXT_robustness",
     "GL_EXT_sRGB_write_control",
     "GL_EXT_texture_format_sRGB_override",
@@ -292,7 +297,6 @@ gles_es_only_extensions = [
     "GL_OES_depth_texture",
     "GL_OES_EGL_sync",
     "GL_OES_packed_depth_stencil",
-    "GL_OES_primitive_bounding_box",
     "GL_OES_surfaceless_context",
 ]
 
@@ -327,6 +331,8 @@ gles_skipped_commands = [
     "glTextureStorage1DEXT",
     "glTextureStorage2DEXT",
     "glTextureStorage3DEXT",
+    # GL_OVR_multiview
+    "glNamedFramebufferTextureMultiviewOVR",
 ]
 
 def check_sorted(name, l):
@@ -414,6 +420,7 @@ supported_egl_extensions = [
     "EGL_KHR_surfaceless_context",
     "EGL_KHR_swap_buffers_with_damage",
     "EGL_KHR_wait_sync",
+    "EGL_NV_context_priority_realtime",
     "EGL_NV_post_sub_buffer",
     "EGL_NV_stream_consumer_gltexture_yuv",
 ]
@@ -433,12 +440,16 @@ supported_cl_extensions = [
     "cl_khr_depth_images",
     "cl_khr_image2d_from_buffer",
 
+    # OpenCL 3.0
+    "cl_khr_external_memory",
+
     # Optional
     "cl_khr_extended_versioning",
     "cl_khr_fp64",
     "cl_khr_icd",
     "cl_khr_int64_base_atomics",
     "cl_khr_int64_extended_atomics",
+    "cl_khr_priority_hints",
 ]
 
 # Strip these suffixes from Context entry point names. NV is excluded (for now).
@@ -481,7 +492,7 @@ class apis:
     CL = 'CL'
 
 # For GLenum types
-api_enums = {apis.GL: 'BigGLEnum', apis.GLES: 'GLESEnum'}
+api_enums = {apis.GLES: 'GLESEnum'}
 default_enum_group_name = 'AllEnums'
 
 

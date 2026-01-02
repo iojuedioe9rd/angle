@@ -6,6 +6,10 @@
 
 // Texture.cpp: Implements the gl::Texture class. [OpenGL ES 2.0.24] section 3.7 page 63.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/Texture.h"
 
 #include "common/mathutil.h"
@@ -146,7 +150,8 @@ TextureState::TextureState(TextureType type)
       mCachedSamplerFormat(SamplerFormat::InvalidEnum),
       mCachedSamplerCompareMode(GL_NONE),
       mCachedSamplerFormatValid(false),
-      mCompressionFixedRate(GL_SURFACE_COMPRESSION_FIXED_RATE_NONE_EXT)
+      mCompressionFixedRate(GL_SURFACE_COMPRESSION_FIXED_RATE_NONE_EXT),
+      mAstcDecodePrecision(GL_RGBA16F)
 {}
 
 TextureState::~TextureState() {}
@@ -216,6 +221,21 @@ bool TextureState::setBaseLevel(GLuint baseLevel)
         return true;
     }
     return false;
+}
+
+bool TextureState::setASTCDecodePrecision(GLenum astcDecodePrecision)
+{
+    if (mAstcDecodePrecision != astcDecodePrecision)
+    {
+        mAstcDecodePrecision = astcDecodePrecision;
+        return true;
+    }
+    return false;
+}
+
+GLenum TextureState::getASTCDecodePrecision() const
+{
+    return mAstcDecodePrecision;
 }
 
 bool TextureState::setMaxLevel(GLuint maxLevel)
@@ -607,15 +627,21 @@ GLuint TextureState::getEnabledLevelCount() const
     const GLuint baseLevel = getEffectiveBaseLevel();
     GLuint maxLevel        = getMipmapMaxLevel();
 
+    // In edge case where base level > max level, make sure to get at least one level.
+    maxLevel = std::max(baseLevel, maxLevel);
+
+    // Note: for cube textures, we only check the first face.
+    TextureTarget target         = TextureTypeToTarget(mType, 0);
+    const Format &expectedFormat = mImageDescs[GetImageDescIndex(target, baseLevel)].format;
+
     // The mip chain will have either one or more sequential levels, or max levels,
     // but not a sparse one.
     Optional<Extents> expectedSize;
     for (size_t enabledLevel = baseLevel; enabledLevel <= maxLevel; ++enabledLevel, ++levelCount)
     {
-        // Note: for cube textures, we only check the first face.
-        TextureTarget target     = TextureTypeToTarget(mType, 0);
         size_t descIndex         = GetImageDescIndex(target, enabledLevel);
         const Extents &levelSize = mImageDescs[descIndex].size;
+        const Format &levelFormat = mImageDescs[descIndex].format;
 
         if (levelSize.empty())
         {
@@ -636,6 +662,14 @@ GLuint TextureState::getEnabledLevelCount() const
             {
                 break;
             }
+        }
+        // If the texture is bound without mipmap filtering, the max level could be incompatible
+        // with the base level while respecifying image storage. In this case, we check the sized
+        // internal format for the compatibility and enable only the effective level when it has
+        // changed compared to the previous image.
+        if (!Format::SameSized(expectedFormat, levelFormat))
+        {
+            break;
         }
         expectedSize = levelSize;
     }
@@ -1031,6 +1065,19 @@ void Texture::setCompareMode(const Context *context, GLenum compareMode)
 GLenum Texture::getCompareMode() const
 {
     return mState.mSamplerState.getCompareMode();
+}
+
+void Texture::setASTCDecodePrecision(const Context *context, GLenum astcDecodePrecision)
+{
+    if (mState.setASTCDecodePrecision(astcDecodePrecision))
+    {
+        signalDirtyState(DIRTY_BIT_ASTC_DECODE_PRECISION);
+    }
+}
+
+GLenum Texture::getASTCDecodePrecision() const
+{
+    return mState.getASTCDecodePrecision();
 }
 
 void Texture::setCompareFunc(const Context *context, GLenum compareFunc)
@@ -1788,7 +1835,7 @@ angle::Result Texture::setStorageMultisample(Context *context,
 
     // Potentially adjust "samples" to a supported value
     const TextureCaps &formatCaps = context->getTextureCaps().get(internalFormat);
-    GLsizei samples               = formatCaps.getNearestSamples(samplesIn);
+    GLsizei samples               = formatCaps.sampleCounts.getNearestSamples(samplesIn);
 
     mState.mImmutableFormat = true;
     mState.mImmutableLevels = static_cast<GLuint>(1);
@@ -2027,8 +2074,7 @@ angle::Result Texture::bindTexImageFromSurface(Context *context, egl::Surface *s
 
     // Set the image info to the size and format of the surface
     ASSERT(mState.mType == TextureType::_2D || mState.mType == TextureType::Rectangle);
-    Extents size(surface->getWidth(), surface->getHeight(), 1);
-    ImageDesc desc(size, surface->getBindTexImageFormat(), InitState::Initialized);
+    ImageDesc desc(surface->getSize(), surface->getBindTexImageFormat(), InitState::Initialized);
     mState.setImageDesc(NonCubeTextureTypeToTarget(mState.mType), 0, desc);
     mState.mHasProtectedContent = surface->hasProtectedContent();
 
@@ -2605,16 +2651,6 @@ void Texture::onSubjectStateChange(angle::SubjectIndex index, angle::SubjectMess
 {
     switch (message)
     {
-        case angle::SubjectMessage::ContentsChanged:
-            if (index != kBufferSubjectIndex)
-            {
-                // ContentsChange originates from TextureStorage11::resolveAndReleaseTexture
-                // which resolves the underlying multisampled texture if it exists and so
-                // Texture will signal dirty storage to invalidate its own cache and the
-                // attached framebuffer's cache.
-                signalDirtyStorage(InitState::Initialized);
-            }
-            break;
         case angle::SubjectMessage::DirtyBitsFlagged:
             signalDirtyState(DIRTY_BIT_IMPLEMENTATION);
 
@@ -2696,11 +2732,7 @@ void Texture::onBufferContentsChange()
 
 void Texture::onBindToMSRTTFramebuffer()
 {
-    if (!mState.mHasBeenBoundToMSRTTFramebuffer)
-    {
-        mDirtyBits.set(DIRTY_BIT_BOUND_TO_MSRTT_FRAMEBUFFER);
-        mState.mHasBeenBoundToMSRTTFramebuffer = true;
-    }
+    mState.mHasBeenBoundToMSRTTFramebuffer = true;
 }
 
 GLenum Texture::getImplementationColorReadFormat(const Context *context) const

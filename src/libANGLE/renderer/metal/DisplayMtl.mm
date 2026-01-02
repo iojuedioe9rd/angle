@@ -6,6 +6,10 @@
 
 // DisplayMtl.mm: Metal implementation of DisplayImpl
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/metal/DisplayMtl.h"
 #include <sys/param.h>
 
@@ -487,8 +491,11 @@ void DisplayMtl::generateExtensions(egl::DisplayExtensions *outExtensions) const
     // EGL_ANGLE_metal_create_context_ownership_identity
     outExtensions->metalCreateContextOwnershipIdentityANGLE = true;
 
-    // EGL_ANGLE_metal_sync_shared_event
+    // EGL_ANGLE_metal_shared_event_sync
     outExtensions->mtlSyncSharedEventANGLE = true;
+
+    // EGL_ANGLE_metal_commands_scheduled_sync
+    outExtensions->mtlSyncCommandsScheduledANGLE = true;
 }
 
 void DisplayMtl::generateCaps(egl::Caps *outCaps) const
@@ -746,15 +753,7 @@ void DisplayMtl::ensureCapsInitialized() const
     // Metal-Feature-Set-Tables.pdf says that max supported point size is 511. We limit it to 64
     // for now. http://anglebug.com/42263403
 
-    // NOTE(kpiddington): This seems to be fixed in macOS Monterey
-    if (@available(macOS 12.0, *))
-    {
-        mNativeCaps.maxAliasedPointSize = 511;
-    }
-    else
-    {
-        mNativeCaps.maxAliasedPointSize = 64;
-    }
+    mNativeCaps.maxAliasedPointSize = 511;
     mNativeCaps.minAliasedLineWidth = 1.0f;
     mNativeCaps.maxAliasedLineWidth = 1.0f;
 
@@ -859,6 +858,7 @@ void DisplayMtl::ensureCapsInitialized() const
 
     // Fill in additional limits for UBOs and SSBOs.
     mNativeCaps.maxUniformBufferBindings = mNativeCaps.maxCombinedUniformBlocks;
+    static_assert(mtl::kMaxUBOSize <= gl::IMPLEMENTATION_MAX_UNIFORM_BLOCK_SIZE);
     mNativeCaps.maxUniformBlockSize      = mtl::kMaxUBOSize;  // Default according to GLES 3.0 spec.
     if (supportsAppleGPUFamily(1))
     {
@@ -944,12 +944,6 @@ void DisplayMtl::initializeExtensions() const
     mNativeExtensions.multiDrawIndirectEXT        = true;
     mNativeExtensions.translatedShaderSourceANGLE = true;
     mNativeExtensions.discardFramebufferEXT       = true;
-    // TODO(anglebug.com/42264909): Apple's implementation exposed
-    // mNativeExtensions.textureRectangle = true here and
-    // EGL_TEXTURE_RECTANGLE_ANGLE as the eglBindTexImage texture target on
-    // macOS. This no longer seems necessary as IOSurfaces can be bound to
-    // regular 2D textures with Metal, and causes other problems such as
-    // breaking the SPIR-V Metal compiler.
 
     mNativeExtensions.multisampledRenderToTextureEXT =
         (supportsAppleGPUFamily(1) ||
@@ -1245,11 +1239,6 @@ void DisplayMtl::initializeFeatures()
                             supportsAppleGPUFamily(1) && !isSimulator);
     ANGLE_FEATURE_CONDITION((&mFeatures), emulateTransformFeedback, true);
 
-    ANGLE_FEATURE_CONDITION((&mFeatures), intelExplicitBoolCastWorkaround,
-                            isIntel() && GetMacOSVersion() < OSVersion(11, 0, 0));
-    ANGLE_FEATURE_CONDITION((&mFeatures), intelDisableFastMath,
-                            isIntel() && GetMacOSVersion() < OSVersion(12, 0, 0));
-
     ANGLE_FEATURE_CONDITION((&mFeatures), emulateAlphaToCoverage,
                             isSimulator || !supportsAppleGPUFamily(1));
 
@@ -1318,9 +1307,14 @@ void DisplayMtl::initializeFeatures()
 
     // Metal compiler optimizations may remove infinite loops causing crashes later in shader
     // execution. http://crbug.com/1513738
-    // Disabled on Mac11 due to test failures. http://crbug.com/1522730
+    ANGLE_FEATURE_CONDITION((&mFeatures), ensureLoopForwardProgress, false);
+
+    // Once not used, injectAsmStatementIntoLoopBodies should be removed and
+    // ensureLoopForwardProgress should default to true.
+    // http://crbug.com/1522730
+    bool shouldUseInjectAsmIntoLoopBodies = !mFeatures.ensureLoopForwardProgress.enabled;
     ANGLE_FEATURE_CONDITION((&mFeatures), injectAsmStatementIntoLoopBodies,
-                            !isOSX || GetMacOSVersion() >= OSVersion(12, 0, 0));
+                            shouldUseInjectAsmIntoLoopBodies);
 }
 
 angle::Result DisplayMtl::initializeShaderLibrary()

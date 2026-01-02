@@ -6,11 +6,18 @@
 // VulkanPerformanceCounterTest:
 //   Validates specific GL call patterns with ANGLE performance counters.
 //   For example we can verify a certain call set doesn't break the render pass.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "include/platform/Feature.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/angle_test_instantiate.h"
 #include "test_utils/gl_raii.h"
+#include "util/EGLWindow.h"
+#include "util/OSWindow.h"
 #include "util/random_utils.h"
 #include "util/shader_utils.h"
 #include "util/test_utils.h"
@@ -148,8 +155,11 @@ class VulkanPerformanceCounterTest : public ANGLETest<>
 
     void testSetUp() override
     {
-        glGenPerfMonitorsAMD(1, &monitor);
-        glBeginPerfMonitorAMD(monitor);
+        // Using local variable so that ASAN can catch "stack-buffer-overflow" error.
+        GLuint localMonitor;
+        glGenPerfMonitorsAMD(1, &localMonitor);
+        glBeginPerfMonitorAMD(localMonitor);
+        monitor = localMonitor;
     }
 
     void testTearDown() override
@@ -238,41 +248,6 @@ class VulkanPerformanceCounterTest : public ANGLETest<>
         ASSERT_GL_NO_ERROR();
     }
 
-    void setExpectedCountersForDepthOps(const angle::VulkanPerfCounters &counters,
-                                        uint64_t incrementalRenderPasses,
-                                        uint64_t incrementalDepthLoadOpClears,
-                                        uint64_t incrementalDepthLoadOpLoads,
-                                        uint64_t incrementalDepthLoadOpNones,
-                                        uint64_t incrementalDepthStoreOpStores,
-                                        uint64_t incrementalDepthStoreOpNones,
-                                        angle::VulkanPerfCounters *expected)
-    {
-        expected->renderPasses       = counters.renderPasses + incrementalRenderPasses;
-        expected->depthLoadOpClears  = counters.depthLoadOpClears + incrementalDepthLoadOpClears;
-        expected->depthLoadOpLoads   = counters.depthLoadOpLoads + incrementalDepthLoadOpLoads;
-        expected->depthLoadOpNones   = counters.depthLoadOpNones + incrementalDepthLoadOpNones;
-        expected->depthStoreOpStores = counters.depthStoreOpStores + incrementalDepthStoreOpStores;
-        expected->depthStoreOpNones  = counters.depthStoreOpNones + incrementalDepthStoreOpNones;
-    }
-
-    void setExpectedCountersForStencilOps(const angle::VulkanPerfCounters &counters,
-                                          uint64_t incrementalStencilLoadOpClears,
-                                          uint64_t incrementalStencilLoadOpLoads,
-                                          uint64_t incrementalStencilLoadOpNones,
-                                          uint64_t incrementalStencilStoreOpStores,
-                                          uint64_t incrementalStencilStoreOpNones,
-                                          angle::VulkanPerfCounters *expected)
-    {
-        expected->stencilLoadOpClears =
-            counters.stencilLoadOpClears + incrementalStencilLoadOpClears;
-        expected->stencilLoadOpLoads = counters.stencilLoadOpLoads + incrementalStencilLoadOpLoads;
-        expected->stencilLoadOpNones = counters.stencilLoadOpNones + incrementalStencilLoadOpNones;
-        expected->stencilStoreOpStores =
-            counters.stencilStoreOpStores + incrementalStencilStoreOpStores;
-        expected->stencilStoreOpNones =
-            counters.stencilStoreOpNones + incrementalStencilStoreOpNones;
-    }
-
     void setExpectedCountersForColorOps(const angle::VulkanPerfCounters &counters,
                                         uint64_t incrementalRenderPasses,
                                         uint64_t incrementalColorLoadOpClears,
@@ -288,16 +263,6 @@ class VulkanPerformanceCounterTest : public ANGLETest<>
         expected->colorLoadOpNones   = counters.colorLoadOpNones + incrementalColorLoadOpNones;
         expected->colorStoreOpStores = counters.colorStoreOpStores + incrementalColorStoreOpStores;
         expected->colorStoreOpNones  = counters.colorStoreOpNones + incrementalColorStoreOpNones;
-    }
-
-    void setAndIncrementDepthStencilLoadCountersForOpsTest(
-        const angle::VulkanPerfCounters &counters,
-        uint64_t incrementalDepthLoadOpLoads,
-        uint64_t incrementalStencilLoadOpLoads,
-        angle::VulkanPerfCounters *expected)
-    {
-        expected->depthLoadOpLoads   = counters.depthLoadOpLoads + incrementalDepthLoadOpLoads;
-        expected->stencilLoadOpLoads = counters.stencilLoadOpLoads + incrementalStencilLoadOpLoads;
     }
 
     void setExpectedCountersForUnresolveResolveTest(const angle::VulkanPerfCounters &counters,
@@ -429,13 +394,81 @@ class VulkanPerformanceCounterTest : public ANGLETest<>
     CounterNameToIndexMap mIndexMap;
 };
 
+class VulkanPerformanceCounterTest_DepthStencilLoadStoreOps : public VulkanPerformanceCounterTest
+{
+  protected:
+    void setExpectedCountersForDepthOps(const angle::VulkanPerfCounters &counters,
+                                        uint64_t incrementalRenderPasses,
+                                        uint64_t incrementalDepthLoadOpClears,
+                                        uint64_t incrementalDepthLoadOpLoads,
+                                        uint64_t incrementalDepthLoadOpNones,
+                                        uint64_t incrementalDepthStoreOpStores,
+                                        uint64_t incrementalDepthStoreOpNones,
+                                        angle::VulkanPerfCounters *expected)
+    {
+        expected->renderPasses       = counters.renderPasses + incrementalRenderPasses;
+        expected->depthLoadOpClears  = counters.depthLoadOpClears + incrementalDepthLoadOpClears;
+        expected->depthLoadOpLoads   = counters.depthLoadOpLoads + incrementalDepthLoadOpLoads;
+        expected->depthLoadOpNones   = counters.depthLoadOpNones + incrementalDepthLoadOpNones;
+        expected->depthStoreOpStores = counters.depthStoreOpStores + incrementalDepthStoreOpStores;
+        expected->depthStoreOpNones  = counters.depthStoreOpNones + incrementalDepthStoreOpNones;
+    }
+
+    void setExpectedCountersForStencilOps(const angle::VulkanPerfCounters &counters,
+                                          uint64_t incrementalStencilLoadOpClears,
+                                          uint64_t incrementalStencilLoadOpLoads,
+                                          uint64_t incrementalStencilLoadOpNones,
+                                          uint64_t incrementalStencilStoreOpStores,
+                                          uint64_t incrementalStencilStoreOpNones,
+                                          angle::VulkanPerfCounters *expected)
+    {
+        expected->stencilLoadOpClears =
+            counters.stencilLoadOpClears + incrementalStencilLoadOpClears;
+        expected->stencilLoadOpLoads = counters.stencilLoadOpLoads + incrementalStencilLoadOpLoads;
+        expected->stencilLoadOpNones = counters.stencilLoadOpNones + incrementalStencilLoadOpNones;
+        expected->stencilStoreOpStores =
+            counters.stencilStoreOpStores + incrementalStencilStoreOpStores;
+        expected->stencilStoreOpNones =
+            counters.stencilStoreOpNones + incrementalStencilStoreOpNones;
+    }
+
+    void setAndIncrementDepthStencilLoadCountersForOpsTest(
+        const angle::VulkanPerfCounters &counters,
+        uint64_t incrementalDepthLoadOpLoads,
+        uint64_t incrementalStencilLoadOpLoads,
+        angle::VulkanPerfCounters *expected)
+    {
+        expected->depthLoadOpLoads   = counters.depthLoadOpLoads + incrementalDepthLoadOpLoads;
+        expected->stencilLoadOpLoads = counters.stencilLoadOpLoads + incrementalStencilLoadOpLoads;
+    }
+};
+
+class VulkanPerformanceCounterTest_RGBSurface : public VulkanPerformanceCounterTest
+{
+  protected:
+    VulkanPerformanceCounterTest_RGBSurface() : VulkanPerformanceCounterTest()
+    {
+        // Only set the Alpha bit to 0 on ARM platforms to avoid EGL configuration
+        // failures.
+        if (IsARM())
+        {
+            setConfigAlphaBits(0);
+        }
+    }
+};
+
 class VulkanPerformanceCounterTest_ES31 : public VulkanPerformanceCounterTest
 {};
 
-class VulkanPerformanceCounterTest_MSAA : public VulkanPerformanceCounterTest
+class VulkanPerformanceCounterTest_DepthStencilLoadStoreOps_ES31
+    : public VulkanPerformanceCounterTest_DepthStencilLoadStoreOps
+{};
+
+class VulkanPerformanceCounterTest_MSAA
+    : public VulkanPerformanceCounterTest_DepthStencilLoadStoreOps
 {
   protected:
-    VulkanPerformanceCounterTest_MSAA() : VulkanPerformanceCounterTest()
+    VulkanPerformanceCounterTest_MSAA() : VulkanPerformanceCounterTest_DepthStencilLoadStoreOps()
     {
         // Make sure the window is non-square to correctly test prerotation
         setWindowWidth(32);
@@ -1868,7 +1901,7 @@ void main()
 }
 
 // Test resolving the depth/stencil attachment
-TEST_P(VulkanPerformanceCounterTest_ES31, MultisampleDepthStencilResolve)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps_ES31, MultisampleDepthStencilResolve)
 {
     ANGLE_SKIP_TEST_IF(!hasDepthStencilResolveThroughAttachment());
 
@@ -2117,7 +2150,7 @@ TEST_P(VulkanPerformanceCounterTest, ClearColorBufferAndReadOnlyDepthStencilUses
 // Similar scenario as in ClearColorBufferAndReadOnlyDepthStencilUsesSingleRenderPass based on
 // Manhattan, but involving queries that end up marking a render pass for closure.  This results in
 // the switch to read-only depth/stencil mode to flush the render pass twice.
-TEST_P(VulkanPerformanceCounterTest,
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
        QueryThenClearColorBufferAndReadOnlyDepthStencilUsesSingleRenderPass)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
@@ -2190,7 +2223,8 @@ TEST_P(VulkanPerformanceCounterTest,
 
 // Make sure depth/stencil clears followed by a switch to read-only mode still lets the color clears
 // use loadOp=CLEAR optimally.
-TEST_P(VulkanPerformanceCounterTest, SwitchToReadOnlyDepthStencilLeavesOtherAspectsOptimal)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       SwitchToReadOnlyDepthStencilLeavesOtherAspectsOptimal)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2710,7 +2744,7 @@ TEST_P(VulkanPerformanceCounterTest_ES31, FramebufferFetchRenderPassThenColorMas
 // Tests that clear after unused depth/stencil is optimized to use loadOp
 //
 // - Scenario: disable depth/stencil, draw, clear
-TEST_P(VulkanPerformanceCounterTest, DepthStencilMaskedDrawThenClear)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilMaskedDrawThenClear)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2760,7 +2794,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilMaskedDrawThenClear)
 // - Scenario: depth test enabled, depth write mask = 0,
 //   clear depth, draw red quad with compare function always,
 //   and then  draw green quad with compare function less equal
-TEST_P(VulkanPerformanceCounterTest, DepthFunctionDynamicChangeLoadOp)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthFunctionDynamicChangeLoadOp)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2810,7 +2844,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthFunctionDynamicChangeLoadOp)
 // Tests that common PUBG MOBILE case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, disable, draw
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateDisableDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2860,7 +2894,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDraw)
 // Tests that alternative PUBG MOBILE case does not break render pass, and that counts are correct:
 //
 // - Scenario: disable, invalidate, draw
-TEST_P(VulkanPerformanceCounterTest, DisableInvalidateDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DisableInvalidateDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2910,7 +2944,7 @@ TEST_P(VulkanPerformanceCounterTest, DisableInvalidateDraw)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: disable, draw, invalidate, enable
-TEST_P(VulkanPerformanceCounterTest, DisableDrawInvalidateEnable)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DisableDrawInvalidateEnable)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -2971,7 +3005,7 @@ TEST_P(VulkanPerformanceCounterTest, DisableDrawInvalidateEnable)
 // Tests that common TRex case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidate)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidate)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3012,7 +3046,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidate)
 
 // Similar to Invalidate, but uses glInvalidateSubFramebuffer such that the given area covers the
 // whole framebuffer.
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateSub)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateSub)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3054,7 +3088,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateSub)
 
 // Similar to InvalidateSub, but uses glInvalidateSubFramebuffer such that the given area does NOT
 // covers the whole framebuffer.
-TEST_P(VulkanPerformanceCounterTest, DepthStencilPartialInvalidateSub)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilPartialInvalidateSub)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3128,7 +3162,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilPartialInvalidateSub)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, draw
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3174,7 +3208,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDraw)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, draw, disable
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisable)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateDrawDisable)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3230,7 +3264,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisable)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, disable, draw, enable
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDrawEnable)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDisableDrawEnable)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3286,7 +3321,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDrawEnable)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, disable, draw, enable, draw
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDrawEnableDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDisableDrawEnableDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3345,7 +3381,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableDrawEnableDraw
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, draw, disable, enable
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnable)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDrawDisableEnable)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3404,7 +3441,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnable)
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, draw, disable, enable, invalidate
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnableInvalidate)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDrawDisableEnableInvalidate)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3465,7 +3503,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnableInva
 // Tests that another case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, draw, disable, enable, invalidate, draw
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnableInvalidateDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDrawDisableEnableInvalidateDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3530,7 +3569,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawDisableEnableInva
 // Tests that another common (dEQP) case does not break render pass, and that counts are correct:
 //
 // - Scenario: invalidate, disable, enable, draw
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableEnableDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDisableEnableDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3585,7 +3625,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDisableEnableDraw)
 }
 
 // Tests that an in renderpass clear after invalidate keeps content stored.
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateAndClear)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateAndClear)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3645,7 +3685,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateAndClear)
 
 // Tests that the draw path for clear after invalidate and disabling depth/stencil test keeps
 // content stored.
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateAndMaskedClear)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthStencilInvalidateAndMaskedClear)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3710,7 +3750,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateAndMaskedClear)
 
 // Tests that the renderpass is using depthFunc(GL_ALWAYS) and depthMask(GL_FALSE), it should not
 // load or store depth value.
-TEST_P(VulkanPerformanceCounterTest, DepthFuncALWAYSWithDepthMaskDisabledShouldNotLoadStore)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthFuncALWAYSWithDepthMaskDisabledShouldNotLoadStore)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3757,7 +3798,7 @@ TEST_P(VulkanPerformanceCounterTest, DepthFuncALWAYSWithDepthMaskDisabledShouldN
 
 // Tests that the renderpass is using depthFunc(GL_ALWAYS) and depthMask(GL_FALSE) and draw. Then it
 // followed by glClear, it should not load or store depth value.
-TEST_P(VulkanPerformanceCounterTest,
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
        DepthFuncALWAYSWithDepthMaskDisabledThenClearShouldNotLoadStore)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
@@ -3815,7 +3856,8 @@ TEST_P(VulkanPerformanceCounterTest,
 
 // Tests that the renderpass is using depthFunc(GL_NEVER) and depthMask(GL_FALSE), it should not
 // load or store depth value.
-TEST_P(VulkanPerformanceCounterTest, DepthFuncNEVERWithDepthMaskDisabledShouldNotLoadStore)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthFuncNEVERWithDepthMaskDisabledShouldNotLoadStore)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3850,7 +3892,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthFuncNEVERWithDepthMaskDisabledShouldNo
 // Tests whether depth-stencil ContentDefined will be correct when:
 //
 // - Scenario: invalidate, detach D/S texture and modify it, attach D/S texture, draw with blend
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDetachModifyTexAttachDrawWithBlend)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDetachModifyTexAttachDrawWithBlend)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3948,7 +3991,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDetachModifyTexAttach
 // still works.
 //
 // - Scenario: invalidate
-TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawAndDeleteRenderbuffer)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       DepthStencilInvalidateDrawAndDeleteRenderbuffer)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -3999,7 +4043,8 @@ TEST_P(VulkanPerformanceCounterTest, DepthStencilInvalidateDrawAndDeleteRenderbu
 // Test that disabling color buffer after clear continues to use loadOp for it.
 //
 // - Scenario: clear color and depth, disable color, draw, enable color, draw
-TEST_P(VulkanPerformanceCounterTest_ES31, ColorDisableThenDrawThenEnableThenDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps_ES31,
+       ColorDisableThenDrawThenEnableThenDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -4720,7 +4765,8 @@ TEST_P(VulkanPerformanceCounterTest, RenderToTextureDepthStencilTextureShouldNot
 
 // Tests that multisampled-render-to-texture depth/stencil renderbuffers don't ever load
 // depth/stencil data.
-TEST_P(VulkanPerformanceCounterTest, RenderToTextureDepthStencilRenderbufferShouldNotLoad)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       RenderToTextureDepthStencilRenderbufferShouldNotLoad)
 {
     // http://anglebug.com/42263651
     ANGLE_SKIP_TEST_IF(IsWindows() && IsAMD() && IsVulkan());
@@ -4849,7 +4895,7 @@ TEST_P(VulkanPerformanceCounterTest, RenderToTextureDepthStencilRenderbufferShou
 
 // Tests counters when multisampled-render-to-texture color/depth/stencil renderbuffers are
 // invalidated.
-TEST_P(VulkanPerformanceCounterTest, RenderToTextureInvalidate)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, RenderToTextureInvalidate)
 {
     // http://anglebug.com/42263651
     ANGLE_SKIP_TEST_IF(IsWindows() && IsAMD() && IsVulkan());
@@ -4980,7 +5026,8 @@ TEST_P(VulkanPerformanceCounterTest, RenderToTextureInvalidate)
 
 // Tests counters when uninitialized multisampled-render-to-texture depth/stencil renderbuffers are
 // unused but not invalidated.
-TEST_P(VulkanPerformanceCounterTest, RenderToTextureUninitializedAndUnusedDepthStencil)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       RenderToTextureUninitializedAndUnusedDepthStencil)
 {
     // http://anglebug.com/42263651
     ANGLE_SKIP_TEST_IF(IsWindows() && IsAMD() && IsVulkan());
@@ -5052,8 +5099,139 @@ TEST_P(VulkanPerformanceCounterTest, RenderToTextureUninitializedAndUnusedDepthS
     EXPECT_COUNTERS_FOR_UNRESOLVE_RESOLVE_TEST(getPerfCounters(), expected);
 }
 
+// Tests that multisampled-render-to-texture depth/stencil renderbuffers resolve to be updated
+// respectively.
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       MultisampleDepthStencilResolveSeparately)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_EXT_multisampled_render_to_texture"));
+
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
+
+    angle::VulkanPerfCounters expected;
+
+    // This test creates 4 render passes. In the first render pass, color, depth and stencil are
+    // cleared. In the following render passes, depth and stencil toggle between Load and Clear
+    // respectively.
+
+    constexpr GLsizei kSize = 6;
+
+    // Create multisampled framebuffer to draw into, with both color and depth attachments.
+    GLTexture colorMS;
+    glBindTexture(GL_TEXTURE_2D, colorMS);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    GLRenderbuffer depthStencilMS;
+    glBindRenderbuffer(GL_RENDERBUFFER, depthStencilMS);
+    glRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, 4, GL_DEPTH24_STENCIL8, kSize, kSize);
+
+    GLFramebuffer fboMS;
+    glBindFramebuffer(GL_FRAMEBUFFER, fboMS);
+    glFramebufferTexture2DMultisampleEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                         colorMS, 0, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                              depthStencilMS);
+    ASSERT_GL_NO_ERROR();
+
+    // Set up texture for copy operation that breaks the render pass
+    GLTexture copyTex;
+    glBindTexture(GL_TEXTURE_2D, copyTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    // Set viewport and clear color, depth and stencil
+    glViewport(0, 0, kSize, kSize);
+    glClearColor(0, 0, 0, 0.0f);
+    glClearDepthf(1.0);
+    glClearStencil(0x55);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    // Output depth/stencil but disable testing so all draw calls succeed
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+
+    glEnable(GL_STENCIL_TEST);
+    glStencilFuncSeparate(GL_FRONT, GL_ALWAYS, 0, 255);
+    glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_KEEP, GL_KEEP);
+    glStencilFuncSeparate(GL_BACK, GL_ALWAYS, 0, 255);
+    glStencilOpSeparate(GL_BACK, GL_KEEP, GL_KEEP, GL_KEEP);
+    glStencilMask(255);
+
+    // Set up program
+    ANGLE_GL_PROGRAM(drawColor, essl1_shaders::vs::Simple(), essl1_shaders::fs::UniformColor());
+    glUseProgram(drawColor);
+    GLint colorUniformLocation =
+        glGetUniformLocation(drawColor, angle::essl1_shaders::ColorUniform());
+    ASSERT_NE(colorUniformLocation, -1);
+
+    // First render pass: The depthLoadOp and stencilLoadOp are Clear.
+    // Expect rpCount+1, depth(Clears+1, Loads+0, LoadNones+0, Stores+1, StoreNones+0),
+    // stencil(Clears+1, Loads+0, LoadNones+0, Stores+1, StoreNones+0)
+    setExpectedCountersForDepthOps(getPerfCounters(), 1, 1, 0, 0, 1, 0, &expected);
+    setExpectedCountersForStencilOps(getPerfCounters(), 1, 0, 0, 1, 0, &expected);
+
+    glUniform4f(colorUniformLocation, 1.0f, 0.0f, 0.0f, 1.0f);
+    drawQuad(drawColor, essl1_shaders::PositionAttrib(), 0.75f);
+    ASSERT_GL_NO_ERROR();
+
+    // Break the first render pass and verify the counters.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_DEPTH_STENCIL_OP_COUNTERS(getPerfCounters(), expected);
+
+    // Second render pass: The depthLoadOp and stencilLoadOp are Load.
+    // Expect rpCount+1, depth(Clears+0, Loads+1, LoadNones+0, Stores+1, StoreNones+0),
+    // stencil(Clears+0, Loads+1, LoadNones+0, Stores+1, StoreNones+0)
+    setExpectedCountersForDepthOps(getPerfCounters(), 1, 0, 1, 0, 1, 0, &expected);
+    setExpectedCountersForStencilOps(getPerfCounters(), 0, 1, 0, 1, 0, &expected);
+
+    glUniform4f(colorUniformLocation, 0.0f, 1.0f, 0.0f, 1.0f);
+    drawQuad(drawColor, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    // Break the second render pass and verify the counters.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_DEPTH_STENCIL_OP_COUNTERS(getPerfCounters(), expected);
+
+    // Clear depth, but not stencil buffer (loadOp D=CLEAR)
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    // Third render pass: The depthLoadOp is Clear and stencilLoadOp is Load.
+    // Expect rpCount+1, depth(Clears+1, Loads+0, LoadNones+0, Stores+1, StoreNones+0),
+    // stencil(Clears+0, Loads+1, LoadNones+0, Stores+1, StoreNones+0)
+    setExpectedCountersForDepthOps(getPerfCounters(), 1, 1, 0, 0, 1, 0, &expected);
+    setExpectedCountersForStencilOps(getPerfCounters(), 0, 1, 0, 1, 0, &expected);
+
+    glUniform4f(colorUniformLocation, 0.0f, 0.0f, 1.0f, 1.0f);
+    drawQuad(drawColor, essl1_shaders::PositionAttrib(), 0.25f);
+    ASSERT_GL_NO_ERROR();
+
+    // Break the third render pass and verify the counters.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_DEPTH_STENCIL_OP_COUNTERS(getPerfCounters(), expected);
+
+    // Clear stencil, but not depth buffer (loadOp S=CLEAR)
+    glClear(GL_STENCIL_BUFFER_BIT);
+
+    // Fourth render pass: The depthLoadOp is Load and stencilLoadOp is Clear.
+    // Expect rpCount+1, depth(Clears+0, Loads+1, LoadNones+0, Stores+1, StoreNones+0),
+    // stencil(Clears+1, Loads+0, LoadNones+0, Stores+1, StoreNones+0)
+    setExpectedCountersForDepthOps(getPerfCounters(), 1, 0, 1, 0, 1, 0, &expected);
+    setExpectedCountersForStencilOps(getPerfCounters(), 1, 0, 0, 1, 0, &expected);
+
+    glUniform4f(colorUniformLocation, 1.0f, 1.0f, 0.0f, 1.0f);
+    drawQuad(drawColor, essl1_shaders::PositionAttrib(), 0.0f);
+    ASSERT_GL_NO_ERROR();
+
+    // Break the fourth render pass and verify the counters.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_DEPTH_STENCIL_OP_COUNTERS(getPerfCounters(), expected);
+}
+
 // Ensures we use read-only depth layout when there is no write
-TEST_P(VulkanPerformanceCounterTest, ReadOnlyDepthBufferLayout)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, ReadOnlyDepthBufferLayout)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -5137,7 +5315,8 @@ TEST_P(VulkanPerformanceCounterTest, ReadOnlyDepthBufferLayout)
 
 // Ensures depth/stencil is not loaded after storeOp=DONT_CARE due to optimization (as opposed to
 // invalidate)
-TEST_P(VulkanPerformanceCounterTest, RenderPassAfterRenderPassWithoutDepthStencilWrite)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+       RenderPassAfterRenderPassWithoutDepthStencilWrite)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -5673,7 +5852,7 @@ void main()
 
     GLsizei offset = 0;
 
-    uint64_t expectedShaderResourcesCacheMisses = 0;
+    uint64_t expectedUniformBuffersCacheMisses = 0;
 
     for (int iteration = 0; iteration < kIterations; ++iteration)
     {
@@ -5693,15 +5872,15 @@ void main()
         // Capture the allocations counter after the first run.
         if (iteration == 0)
         {
-            expectedShaderResourcesCacheMisses =
-                getPerfCounters().shaderResourcesDescriptorSetCacheMisses;
+            expectedUniformBuffersCacheMisses =
+                getPerfCounters().uniformBuffersDescriptorSetCacheMisses;
         }
     }
 
     ASSERT_GL_NO_ERROR();
     if (isFeatureEnabled(Feature::DescriptorSetCache))
     {
-        EXPECT_GT(expectedShaderResourcesCacheMisses, 0u);
+        EXPECT_GT(expectedUniformBuffersCacheMisses, 0u);
     }
 
     // Verify correctness first.
@@ -5719,9 +5898,9 @@ void main()
     if (isFeatureEnabled(Feature::DescriptorSetCache))
     {
         // Check for unnecessary descriptor set allocations.
-        uint64_t actualShaderResourcesCacheMisses =
-            getPerfCounters().shaderResourcesDescriptorSetCacheMisses;
-        EXPECT_EQ(expectedShaderResourcesCacheMisses, actualShaderResourcesCacheMisses);
+        uint64_t actualUniformBuffersCacheMisses =
+            getPerfCounters().uniformBuffersDescriptorSetCacheMisses;
+        EXPECT_EQ(expectedUniformBuffersCacheMisses, actualUniformBuffersCacheMisses);
     }
 }
 
@@ -6005,7 +6184,7 @@ TEST_P(VulkanPerformanceCounterTest, BufferSubDataShouldNotTriggerSyncState_Copy
 }
 
 // Verifies that rendering to backbuffer discards depth/stencil.
-TEST_P(VulkanPerformanceCounterTest, SwapShouldInvalidateDepthStencil)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, SwapShouldInvalidateDepthStencil)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -6889,7 +7068,7 @@ TEST_P(VulkanPerformanceCounterTest, DrawThenInceptionScissorClears)
 }
 
 // Test that color clears are respected after invalidate
-TEST_P(VulkanPerformanceCounterTest, ColorClearAfterInvalidate)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, ColorClearAfterInvalidate)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -6952,7 +7131,7 @@ TEST_P(VulkanPerformanceCounterTest, ColorClearAfterInvalidate)
 }
 
 // Test that depth clears are picked up as loadOp even if a color blit is done in between.
-TEST_P(VulkanPerformanceCounterTest, DepthClearThenColorBlitThenDraw)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, DepthClearThenColorBlitThenDraw)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -7519,7 +7698,7 @@ void main() {
 
     ASSERT_GL_NO_ERROR();
 
-    GLuint expectedCacheMisses = getPerfCounters().shaderResourcesDescriptorSetCacheMisses;
+    GLuint expectedCacheMisses = getPerfCounters().uniformBuffersDescriptorSetCacheMisses;
     GLuint totalAllocationsAtFirstProgram = getPerfCounters().descriptorSetAllocations;
     if (isFeatureEnabled(Feature::DescriptorSetCache))
     {
@@ -7537,7 +7716,7 @@ void main() {
 
     if (isFeatureEnabled(Feature::DescriptorSetCache))
     {
-        GLuint actualCacheMisses = getPerfCounters().shaderResourcesDescriptorSetCacheMisses;
+        GLuint actualCacheMisses = getPerfCounters().uniformBuffersDescriptorSetCacheMisses;
         EXPECT_EQ(expectedCacheMisses, actualCacheMisses);
     }
     else
@@ -8002,7 +8181,7 @@ outData = vec4(1.0, 1.0, 1.0, 1.0);
 
 // Test that post-render-pass-to-swapchain glFenceSync followed by eglSwapBuffers incurs only a
 // single submission.
-TEST_P(VulkanPerformanceCounterTest, FenceThenSwapBuffers)
+TEST_P(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps, FenceThenSwapBuffers)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
 
@@ -8330,6 +8509,70 @@ TEST_P(VulkanPerformanceCounterTest, SubmittingOutsideCommandBufferAssertIsOpen)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
 }
 
+// Demonstrate the WAW syncVal bug https://anglebug.com/400789178
+TEST_P(VulkanPerformanceCounterTest, DepthBufferWriteThenReadThenWriteInThreeRenderPasses)
+{
+    ANGLE_GL_PROGRAM(drawGreen, essl1_shaders::vs::Simple(), essl1_shaders::fs::Green());
+    ANGLE_GL_PROGRAM(drawBlue, essl1_shaders::vs::Simple(), essl1_shaders::fs::Blue());
+
+    constexpr GLsizei kWidth  = 4;
+    constexpr GLsizei kHeight = 4;
+
+    GLTexture colorTexture1;
+    glBindTexture(GL_TEXTURE_2D, colorTexture1);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kWidth, kHeight);
+
+    GLTexture colorTexture2;
+    glBindTexture(GL_TEXTURE_2D, colorTexture2);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kWidth, kHeight);
+
+    GLRenderbuffer depthStencil;
+    glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, kWidth, kHeight);
+
+    GLFramebuffer fbo1;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture1, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthStencil);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthStencil);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+    glViewport(0, 0, kWidth, kHeight);
+
+    GLFramebuffer fbo2;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo2);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture2, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthStencil);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthStencil);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+    glViewport(0, 0, kWidth, kHeight);
+
+    GLfloat depthValue = 0.0f;
+    // Draw to fbo1 with depth buffer write
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo1);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearDepthf(depthValue * 0.5f + 0.5f);
+    glClearStencil(0x55);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    drawQuad(drawGreen, essl1_shaders::PositionAttrib(), depthValue);
+
+    // Draw to fbo2 with read only depth buffer
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo2);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDepthMask(GL_FALSE);
+    drawQuad(drawGreen, essl1_shaders::PositionAttrib(), depthValue);
+
+    std::array<GLenum, 2> attachments = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
+    glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 2, attachments.data());
+
+    // Draw to fbo1 with depth buffer write
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo1);
+    glDepthMask(GL_TRUE);
+    drawQuad(drawBlue, essl1_shaders::PositionAttrib(), depthValue);
+    glFinish();
+}
+
 // Verifies that clear followed by eglSwapBuffers() on multisampled FBO does not result
 // extra resolve pass, if the surface is double-buffered and when the egl swap behavior
 // is EGL_BUFFER_DESTROYED
@@ -8409,6 +8652,43 @@ TEST_P(VulkanPerformanceCounterTest, TextureOverwriteDoesNotBreakRenderPass)
     EXPECT_PIXEL_RECT_EQ(0, 0, getWindowWidth(), getWindowHeight(), GLColor::red);
 }
 
+// Verifies whether, when GL_RASTERIZER_DISCARD is enabled and no glClear is issued,
+// the Vulkan color attachment uses VK_ATTACHMENT_LOAD_OP_NONE and VK_ATTACHMENT_STORE_OP_NONE,
+// as no actual rendering or clearing is expected.
+TEST_P(VulkanPerformanceCounterTest_RGBSurface, UnrenderedSurfaceShouldNotClear)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled(kPerfMonitorExtensionName));
+    ANGLE_SKIP_TEST_IF(!hasLoadOpNoneSupport());
+
+    // Use default EGL window, display, surface, and context.
+    EGLWindow *window  = getEGLWindow();
+    EGLDisplay dpy     = window->getDisplay();
+    EGLSurface surface = window->getSurface();
+    EGLContext context = window->getContext();
+
+    // Make the default context current.
+    EXPECT_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+    ASSERT_EGL_SUCCESS() << "eglMakeCurrent failed.";
+
+    angle::VulkanPerfCounters expected;
+    // Expect rpCount+1, color(Clears+0, Loads+0, LoadNones+1, Stores+0, StoreNones+1)
+    setExpectedCountersForColorOps(getPerfCounters(), 1, 0, 0, 1, 0, 1, &expected);
+
+    glEnable(GL_RASTERIZER_DISCARD);
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), essl1_shaders::fs::Green());
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    glDisable(GL_RASTERIZER_DISCARD);
+
+    // Validate no GL errors and check performance counters.
+    ASSERT_GL_NO_ERROR();
+    EXPECT_EQ(expected.renderPasses, getPerfCounters().renderPasses);
+    glFinish();
+    EXPECT_COLOR_OP_COUNTERS(getPerfCounters(), expected);
+
+    // Restore original context (optional if already using default).
+    eglMakeCurrent(dpy, window->getSurface(), window->getSurface(), window->getContext());
+}
+
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VulkanPerformanceCounterTest);
 ANGLE_INSTANTIATE_TEST(
     VulkanPerformanceCounterTest,
@@ -8422,8 +8702,20 @@ ANGLE_INSTANTIATE_TEST(
         .enable(Feature::PreferMonolithicPipelinesOverLibraries)
         .disable(Feature::MergeProgramPipelineCachesToGlobalCache));
 
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
+    VulkanPerformanceCounterTest_DepthStencilLoadStoreOps);
+ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps,
+                       ES3_VULKAN(),
+                       ES3_VULKAN_SWIFTSHADER());
+
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VulkanPerformanceCounterTest_ES31);
 ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_ES31, ES31_VULKAN(), ES31_VULKAN_SWIFTSHADER());
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
+    VulkanPerformanceCounterTest_DepthStencilLoadStoreOps_ES31);
+ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_DepthStencilLoadStoreOps_ES31,
+                       ES31_VULKAN(),
+                       ES31_VULKAN_SWIFTSHADER());
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VulkanPerformanceCounterTest_MSAA);
 ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_MSAA,
@@ -8442,5 +8734,18 @@ ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_Prerotation,
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VulkanPerformanceCounterTest_SingleBuffer);
 ANGLE_INSTANTIATE_TEST(VulkanPerformanceCounterTest_SingleBuffer, ES3_VULKAN());
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VulkanPerformanceCounterTest_RGBSurface);
+ANGLE_INSTANTIATE_TEST(
+    VulkanPerformanceCounterTest_RGBSurface,
+    ES3_VULKAN(),
+    ES3_VULKAN().enable(Feature::PadBuffersToMaxVertexAttribStride),
+    ES3_VULKAN_SWIFTSHADER().enable(Feature::PreferMonolithicPipelinesOverLibraries),
+    ES3_VULKAN_SWIFTSHADER()
+        .enable(Feature::PreferMonolithicPipelinesOverLibraries)
+        .enable(Feature::SlowDownMonolithicPipelineCreationForTesting),
+    ES3_VULKAN_SWIFTSHADER()
+        .enable(Feature::PreferMonolithicPipelinesOverLibraries)
+        .disable(Feature::MergeProgramPipelineCachesToGlobalCache));
 
 }  // anonymous namespace
